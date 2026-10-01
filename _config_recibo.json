@@ -1,0 +1,13 @@
+{
+    "titulo_comprovante_vales": "COMPROVANTE DE VALES",
+    "titulo_comprovante_pagamento": "COMPROVANTE DE PAGAMENTO",
+    "rotulo_auxilio": "Auxílio combustível",
+    "rotulo_vale": "Vale alimentação",
+    "rotulo_aj": "AJ. CUSTO",
+    "frase_recebi": "Recebi da",
+    "frase_referente_aux_va": "referente a Auxílio Combustível e Vale Alimentação",
+    "frase_referente_aux_va_aj": "referente a Auxílio Combustível, Vale Alimentação e AJ. CUSTO",
+    "frase_pagamento": "a título de pagamento de salário líquido",
+    "fechamento": "E por ser verdade assino o presente recibo.",
+    "conforme_descrito": "conforme descrito abaixo."
+}
