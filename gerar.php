@@ -1826,14 +1826,18 @@ function extrairFuncionariosXlsx(string $path): array
     $formato = detectarFormatoPlanilha($rowsPrimeira);
 
     if ($formato === 'folha_pagamento') {
-        // Cada aba é uma empresa. Lê todas (exceto Fidelidade).
+        // Cada aba é uma empresa. Lê todas (exceto Fidelidade e abas sem nome).
         $todos = [];
         foreach ($abas as $aba) {
             if ($aba['empresa_chave'] === null) {
-                continue; // Fidelidade: não emite recibos desta folha.
+                continue; // Fidelidade / aba de resumo: não emite recibos.
             }
             $rows = lerPlanilhaXlsx($aba['xml'], $ss);
-            $funcs = extrairFuncionariosFolhaPagamento($rows, $aba['empresa_chave']);
+            // '__auto__': nome de aba não reconhecido, mas não é Fidelidade.
+            // Passa null como override para que extrairFuncionariosFolhaPagamento
+            // detecte a empresa pelo conteúdo do título da planilha.
+            $override = ($aba['empresa_chave'] === '__auto__') ? null : $aba['empresa_chave'];
+            $funcs = extrairFuncionariosFolhaPagamento($rows, $override);
             foreach ($funcs as $f) {
                 $todos[] = $f;
             }
@@ -1906,12 +1910,14 @@ function chaveEmpresaPorNomeAba(string $nome): ?string
 {
     $n = strtolower(semAcento(trim($nome)));
     if ($n === '' || strpos($n, 'fidelidade') !== false) {
-        return null; // pulado
+        return null; // pulado — aba de resumo, não emite recibos
     }
     if (strpos($n, 'clinica') !== false) return 'clinica';
     if (strpos($n, 'laborat') !== false) return 'laboratorio';
     if (strpos($n, 'fs') !== false) return 'fs';
-    return null;
+    // Aba com nome desconhecido mas não é Fidelidade: deixa o conteúdo
+    // da planilha determinar a empresa (título na célula B1/C1).
+    return '__auto__';
 }
 
 /**
@@ -1931,9 +1937,15 @@ function detectarFormatoPlanilha(array $rows): string
             $texto .= ' ' . (string) $v;
         }
         $t = strtolower(semAcento($texto));
-        // Formato folha de pagamento: cabeçalho com "salario bruto", "aux. combust", "va"
+        // Formato folha de pagamento: cabeçalho clássico com salário+combustível,
+        // OU formato "recibos" com colunas específicas (Serviços Prestados, Vale Gás,
+        // Premiação) ao lado da coluna Funcionários — caso das abas novas.
         if (strpos($t, 'salario bruto') !== false
-            || (strpos($t, 'aux. combust') !== false && strpos($t, 'salario') !== false)) {
+            || (strpos($t, 'aux. combust') !== false && strpos($t, 'salario') !== false)
+            || ((strpos($t, 'servicos prestados') !== false
+                || strpos($t, 'vale gas') !== false
+                || strpos($t, 'premiacao') !== false)
+                && strpos($t, 'funcionario') !== false)) {
             return 'folha_pagamento';
         }
     }
