@@ -78,10 +78,15 @@ function montarDados(array $entrada): array
     $comissao       = parseValor($entrada['comissao'] ?? 0);
     $salarioLiquido = parseValor($entrada['salario_liquido'] ?? 0);
     $salarioBruto   = parseValor($entrada['salario_bruto'] ?? 0);
+    $valeGas           = parseValor($entrada['vale_gas'] ?? 0);
+    $prestacaoServicos = parseValor($entrada['prestacao_servicos'] ?? 0);
+    $premiacao         = parseValor($entrada['premiacao'] ?? 0);
 
     $tipoBruto = (string) ($entrada['tipo'] ?? 'comprovante');
     if ($tipoBruto === 'comprovante_pagamento') {
         $tipo = 'comprovante_pagamento';
+    } elseif ($tipoBruto === 'comprovante_recibos') {
+        $tipo = 'comprovante_recibos';
     } else {
         $tipo = 'comprovante';
     }
@@ -112,28 +117,34 @@ function montarDados(array $entrada): array
         // Comissão é somada ao total também no Comprovante de Pagamento
         // (exibida como linha e acrescentada ao valor pago).
         $total = round($total + $comissao, 2);
+    } elseif ($tipo === 'comprovante_recibos') {
+        // Recibos: soma dos 5 campos específicos (apenas os que têm valor)
+        $total = round($combustivel + $alimentacao + $valeGas + $prestacaoServicos + $premiacao, 2);
     } else {
         $total = round($combustivel + $alimentacao + $ajCusto + $comissao, 2);
     }
 
     return [
-        'empresa'         => $empresaNome,
-        'empresa_chave'   => $empresaChave,
-        'logo_path'       => $logoPath,
-        'combustivel'     => $combustivel,
-        'alimentacao'     => $alimentacao,
-        'aj_custo'        => $ajCusto,
-        'comissao'        => $comissao,
-        'salario_liquido' => $salarioLiquido,
-        'salario_bruto'   => $salarioBruto,
-        'tipo'            => $tipo,
-        'valor_total'     => $total,
-        'extenso'         => valorPorExtenso($total),
-        'periodo'        => trim($entrada['periodo'] ?? ''),
-        'data'           => trim($entrada['data'] ?? ''),
-        'nome'           => trim($entrada['nome'] ?? ''),
-        'cpf'            => trim($entrada['cpf'] ?? ''),
-        'cidade'         => trim($entrada['cidade'] ?? ''),
+        'empresa'              => $empresaNome,
+        'empresa_chave'        => $empresaChave,
+        'logo_path'            => $logoPath,
+        'combustivel'          => $combustivel,
+        'alimentacao'          => $alimentacao,
+        'aj_custo'             => $ajCusto,
+        'comissao'             => $comissao,
+        'salario_liquido'      => $salarioLiquido,
+        'salario_bruto'        => $salarioBruto,
+        'vale_gas'             => $valeGas,
+        'prestacao_servicos'   => $prestacaoServicos,
+        'premiacao'            => $premiacao,
+        'tipo'                 => $tipo,
+        'valor_total'          => $total,
+        'extenso'              => valorPorExtenso($total),
+        'periodo'              => trim($entrada['periodo'] ?? ''),
+        'data'                 => trim($entrada['data'] ?? ''),
+        'nome'                 => trim($entrada['nome'] ?? ''),
+        'cpf'                  => trim($entrada['cpf'] ?? ''),
+        'cidade'               => trim($entrada['cidade'] ?? ''),
     ];
 }
 
@@ -364,12 +375,15 @@ function periodoParaPlaceholders(string $periodo): array
 function preencherXmlDoModelo(string $xml, array $d): string
 {
     $empresa     = $d['empresa'];
+    $tipo        = $d['tipo'] ?? '';
     // O modelo DOCX já tem "R$" literal antes do placeholder
     // ("Auxilio combustível R$ {Valor de combustivel}"). formatarMoeda
     // devolve "R$ X,XX" (formato usado no HTML, que não tem o "R$" literal);
     // para o DOCX removemos o prefixo para não duplicar ("R$ R$ 0,00").
-    $combustivel = preg_replace('/^R\$\s*/', '', formatarMoeda($d['combustivel']));
-    $alimentacao = preg_replace('/^R\$\s*/', '', formatarMoeda($d['alimentacao']));
+    $combustivelVal = (float)($d['combustivel'] ?? 0);
+    $alimentacaoVal = (float)($d['alimentacao'] ?? 0);
+    $combustivel = preg_replace('/^R\$\s*/', '', formatarMoeda($combustivelVal));
+    $alimentacao = preg_replace('/^R\$\s*/', '', formatarMoeda($alimentacaoVal));
     $extenso     = $d['extenso']; // já vem com ponto final
     $nome        = $d['nome'];
     $cpfFmt      = formatarCpf($d['cpf']);
@@ -481,34 +495,81 @@ function preencherXmlDoModelo(string $xml, array $d): string
     );
 
     // 4) Valor do combustível
-    $xml = str_replace('{Valor de combustivel}', $combustivel, $xml);
+    if ($tipo === 'comprovante_recibos' && $combustivelVal == 0) {
+        // Para recibos, remove o parágrafo inteiro se o valor for zero.
+        $xml = preg_replace('/<w:p\b[^>]*>(?:(?!<\/w:p>).)*\{Valor de combustivel\}(?:(?!<\/w:p>).)*<\/w:p>/s', '', $xml, 1);
+    } else {
+        $xml = str_replace('{Valor de combustivel}', $combustivel, $xml);
+    }
+
     // 5) Valor da alimentação (modelo tem "alimentaçao" com ç, sem til).
     //    Quando há comissão, injetamos um parágrafo extra "Comissão R$ X,XX"
     //    logo após o parágrafo da alimentação, espelhando o mesmo layout
     //    (label + tab + "R$" + valor). A âncora é a run inteira do
     //    placeholder da alimentação, que é única no documento.
+    //    Para comprovante_recibos, injetamos vale_gas, prestacao_servicos e
+    //    premiacao como parágrafos extras (apenas os não-zerados).
     $comissao = (float) ($d['comissao'] ?? 0);
     $alimAnchor = '{Valor de alimentaçao }</w:t></w:r></w:p>';
-    $alimReplace = $alimentacao . '</w:t></w:r></w:p>';
-    if ($comissao > 0) {
-        $comissaoFmt = preg_replace('/^R\$\s*/', '', formatarMoeda($comissao));
-        // Estrutura idêntica à linha "Vale alimentação" do modelo:
-        // tab à esquerda (pos 5666), "R$" literal, valor sem prefixo.
-        $pComissao = '<w:p w:rsidR="00DE4B3A" w:rsidRDefault="00000000">'
-            . '<w:pPr><w:tabs><w:tab w:val="left" w:pos="5666"/></w:tabs>'
-            . '<w:spacing w:before="41"/><w:ind w:left="1"/><w:jc w:val="both"/>'
-            . '<w:rPr><w:sz w:val="24"/></w:rPr></w:pPr>'
-            . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>Comissão</w:t></w:r>'
-            . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:tab/><w:t>R$</w:t></w:r>'
-            . '<w:r><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
-            . '<w:t xml:space="preserve"> </w:t></w:r>'
-            . '<w:r w:rsidR="00902927"><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
-            . '<w:t xml:space="preserve">' . xml($comissaoFmt) . '</w:t></w:r></w:p>';
-        $alimReplace .= $pComissao;
+
+    // Monta os parágrafos extras a injetar após a alimentação.
+    $extraParas = '';
+
+    if ($tipo === 'comprovante_recibos') {
+        // Campos adicionais de recibos (apenas não-zerados).
+        $camposExtra = [
+            'Vale Gás'              => (float)($d['vale_gas'] ?? 0),
+            'Prestação de Serviços' => (float)($d['prestacao_servicos'] ?? 0),
+            'Premiação'             => (float)($d['premiacao'] ?? 0),
+        ];
+        foreach ($camposExtra as $rotExtra => $valExtra) {
+            if ($valExtra > 0) {
+                $valExtraFmt = preg_replace('/^R\$\s*/', '', formatarMoeda($valExtra));
+                $extraParas .= '<w:p w:rsidR="00DE4B3A" w:rsidRDefault="00000000">'
+                    . '<w:pPr><w:tabs><w:tab w:val="left" w:pos="5666"/></w:tabs>'
+                    . '<w:spacing w:before="41"/><w:ind w:left="1"/><w:jc w:val="both"/>'
+                    . '<w:rPr><w:sz w:val="24"/></w:rPr></w:pPr>'
+                    . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>' . xml($rotExtra) . '</w:t></w:r>'
+                    . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:tab/><w:t>R$</w:t></w:r>'
+                    . '<w:r><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
+                    . '<w:t xml:space="preserve"> </w:t></w:r>'
+                    . '<w:r w:rsidR="00902927"><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
+                    . '<w:t xml:space="preserve">' . xml($valExtraFmt) . '</w:t></w:r></w:p>';
+            }
+        }
+        if ($alimentacaoVal == 0) {
+            // Remove o parágrafo da alimentação e injeta os extras no lugar.
+            $xml = preg_replace(
+                '/<w:p\b[^>]*>(?:(?!<\/w:p>).)*\{Valor de alimenta[çc]ao[ ]?\}(?:(?!<\/w:p>).)*<\/w:p>/s',
+                $extraParas,
+                $xml,
+                1
+            );
+        } else {
+            $alimReplace = $alimentacao . '</w:t></w:r></w:p>' . $extraParas;
+            $xml = str_replace($alimAnchor, $alimReplace, $xml);
+            $xml = str_replace('{Valor de alimentaçao}', $alimentacao, $xml);
+        }
+    } else {
+        $alimReplace = $alimentacao . '</w:t></w:r></w:p>';
+        if ($comissao > 0) {
+            $comissaoFmt = preg_replace('/^R\$\s*/', '', formatarMoeda($comissao));
+            $pComissao = '<w:p w:rsidR="00DE4B3A" w:rsidRDefault="00000000">'
+                . '<w:pPr><w:tabs><w:tab w:val="left" w:pos="5666"/></w:tabs>'
+                . '<w:spacing w:before="41"/><w:ind w:left="1"/><w:jc w:val="both"/>'
+                . '<w:rPr><w:sz w:val="24"/></w:rPr></w:pPr>'
+                . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>Comissão</w:t></w:r>'
+                . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:tab/><w:t>R$</w:t></w:r>'
+                . '<w:r><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
+                . '<w:t xml:space="preserve"> </w:t></w:r>'
+                . '<w:r w:rsidR="00902927"><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
+                . '<w:t xml:space="preserve">' . xml($comissaoFmt) . '</w:t></w:r></w:p>';
+            $alimReplace .= $pComissao;
+        }
+        $xml = str_replace($alimAnchor, $alimReplace, $xml);
+        // Variante sem espaço (caso o modelo não tenha o espaço final)
+        $xml = str_replace('{Valor de alimentaçao}', $alimentacao, $xml);
     }
-    $xml = str_replace($alimAnchor, $alimReplace, $xml);
-    // Variante sem espaço (caso o modelo não tenha o espaço final)
-    $xml = str_replace('{Valor de alimentaçao}', $alimentacao, $xml);
 
     // 6) Data por extenso. No modelo o trecho (após o "MS – ") é:
     //    <w:r>...<w:t>0</w:t></w:r>
@@ -827,6 +888,8 @@ if ($acao === 'csv') {
     $tipoBruto = (string) ($_POST['tipo'] ?? 'comprovante');
     if ($tipoBruto === 'comprovante_pagamento') {
         $tipo = 'comprovante_pagamento';
+    } elseif ($tipoBruto === 'comprovante_recibos') {
+        $tipo = 'comprovante_recibos';
     } else {
         // Tipo padrão é 'comprovante' (Aux + VA + AJ. CUSTO quando houver).
         // O antigo tipo 'recibo' foi unificado com 'comprovante'.
@@ -899,7 +962,8 @@ if ($acao === 'csv') {
             $bin = gerarDocx($dados);
             $prefixo = $rotuloEmp[$f['empresa']] ?? strtoupper($f['empresa']);
             $rotuloTipo = $tipo === 'comprovante_pagamento' ? 'ComprovantePagto'
-                : ($tipo === 'comprovante' ? 'Comprovante' : 'Recibo');
+                : ($tipo === 'comprovante_recibos' ? 'Recibo'
+                : ($tipo === 'comprovante' ? 'Comprovante' : 'Recibo'));
             $arq = nomeUnico($prefixo . '_' . $rotuloTipo . '_' . nomeArquivo($f['nome'], 'docx'), $usados);
             $zip->addFromString($arq, $bin);
             $gerados++;
@@ -955,7 +1019,8 @@ if ($acao === 'csv') {
             ]));
             $bin = gerarDocx($dados);
             $rotuloTipo = $tipo === 'comprovante_pagamento' ? 'ComprovantePagto'
-                : ($tipo === 'comprovante' ? 'Comprovante' : 'Recibo');
+                : ($tipo === 'comprovante_recibos' ? 'Recibo'
+                : ($tipo === 'comprovante' ? 'Comprovante' : 'Recibo'));
             $zip->addFromString(nomeUnico($rotuloTipo . '_' . nomeArquivo($nome, 'docx'), $usados), $bin);
             $gerados++;
         }
@@ -980,7 +1045,7 @@ if ($acao === 'csv') {
     @unlink($tmpZip);
 
     $arqZip = $tipo === 'comprovante_pagamento' ? 'comprovantes_pagamento_lote.zip'
-        : 'comprovantes_lote.zip';
+        : ($tipo === 'comprovante_recibos' ? 'recibos_lote.zip' : 'comprovantes_lote.zip');
     header('Content-Type: application/zip');
     header('Content-Disposition: attachment; filename="' . $arqZip . '"');
     header('Content-Length: ' . strlen($binZip));
@@ -1022,16 +1087,21 @@ if ($acao === 'csv') {
     $erroLeitura = '';
     $porEmpresa = [];   // chave => ['nome','qtd','qtdVales','qtdPagto','aux','va','aj','bruto','liquido','liqCalc']
     $totalGeral = [
-        'qtd'      => 0,
-        'qtdVales' => 0,
-        'qtdPagto' => 0,
-        'aux'      => 0.0,
-        'va'       => 0.0,
-        'aj'       => 0.0,
-        'comissao' => 0.0,
-        'bruto'    => 0.0,
-        'liquido'  => 0.0,
-        'liqCalc'  => 0.0,
+        'qtd'           => 0,
+        'qtdVales'      => 0,
+        'qtdPagto'      => 0,
+        'qtdRecibos'    => 0,
+        'aux'           => 0.0,
+        'va'            => 0.0,
+        'aj'            => 0.0,
+        'comissao'      => 0.0,
+        'bruto'         => 0.0,
+        'liquido'       => 0.0,
+        'liqCalc'       => 0.0,
+        'vale_gas'      => 0.0,
+        'prestacao'     => 0.0,
+        'premiacao_tot' => 0.0,
+        'totalRecibos'  => 0.0,
     ];
     $temSalarios = false;
 
@@ -1051,19 +1121,22 @@ if ($acao === 'csv') {
         $chave = $f['empresa'];
         if (!isset($porEmpresa[$chave])) {
             $porEmpresa[$chave] = [
-                'nome'      => $empNomes[$chave] ?? $chave,
-                'qtd'       => 0,
-                'qtdVales'  => 0,   // quantos geram Comprovante de Vales (Aux+VA > 0)
-                'qtdPagto'  => 0,   // quantos geram Comprovante de Pagamento (salário > 0)
-                'aux'       => 0.0,
-                'va'        => 0.0,
-                'aj'        => 0.0,
-                'comissao'  => 0.0,
-                'bruto'     => 0.0,
-                'liquido'   => 0.0,
-                // Para Comprovante de Pagamento, calculamos o líquido que vai
-                // entrar no doc (= bruto - aux - va - aj). Usado nos cards.
-                'liqCalc'   => 0.0,
+                'nome'         => $empNomes[$chave] ?? $chave,
+                'qtd'          => 0,
+                'qtdVales'     => 0,   // quantos geram Comprovante de Vales (Aux+VA > 0)
+                'qtdPagto'     => 0,   // quantos geram Comprovante de Pagamento (salário > 0)
+                'qtdRecibos'   => 0,   // quantos geram Comprovante de Recibos
+                'aux'          => 0.0,
+                'va'           => 0.0,
+                'aj'           => 0.0,
+                'comissao'     => 0.0,
+                'bruto'        => 0.0,
+                'liquido'      => 0.0,
+                'liqCalc'      => 0.0,
+                'vale_gas'     => 0.0,
+                'prestacao'    => 0.0,
+                'premiacao'    => 0.0,
+                'totalRecibos' => 0.0,
             ];
         }
         $aux = (float)$f['combustivel'];
@@ -1072,6 +1145,9 @@ if ($acao === 'csv') {
         $com = (float)($f['comissao'] ?? 0);
         $bruto   = (float)($f['salario_bruto']   ?? 0);
         $liquido = (float)($f['salario_liquido'] ?? 0);
+        $vg  = (float)($f['vale_gas']           ?? 0);
+        $ps  = (float)($f['prestacao_servicos']  ?? 0);
+        $pm  = (float)($f['premiacao']           ?? 0);
 
         // Líquido que vai aparecer no Comprovante de Pagamento:
         // - usa o salário_liquido da planilha se preenchido
@@ -1080,14 +1156,20 @@ if ($acao === 'csv') {
             ? $liquido
             : ($bruto > 0 ? max(0, round($bruto - $aux - $va - $aj, 2)) : 0);
 
+        $totalRecibos = round($aux + $va + $vg + $ps + $pm, 2);
+
         $porEmpresa[$chave]['qtd']++;
-        $porEmpresa[$chave]['aux']      += $aux;
-        $porEmpresa[$chave]['va']       += $va;
-        $porEmpresa[$chave]['aj']       += $aj;
-        $porEmpresa[$chave]['comissao'] += $com;
-        $porEmpresa[$chave]['bruto']    += $bruto;
-        $porEmpresa[$chave]['liquido']  += $liquido;
-        $porEmpresa[$chave]['liqCalc']  += $liqCalc;
+        $porEmpresa[$chave]['aux']          += $aux;
+        $porEmpresa[$chave]['va']           += $va;
+        $porEmpresa[$chave]['aj']           += $aj;
+        $porEmpresa[$chave]['comissao']     += $com;
+        $porEmpresa[$chave]['bruto']        += $bruto;
+        $porEmpresa[$chave]['liquido']      += $liquido;
+        $porEmpresa[$chave]['liqCalc']      += $liqCalc;
+        $porEmpresa[$chave]['vale_gas']     += $vg;
+        $porEmpresa[$chave]['prestacao']    += $ps;
+        $porEmpresa[$chave]['premiacao']    += $pm;
+        $porEmpresa[$chave]['totalRecibos'] += $totalRecibos;
 
         // Só conta como "geraria doc" se o total for > 0 no tipo.
         if ($aux > 0 || $va > 0 || $aj > 0 || $com > 0) {
@@ -1098,15 +1180,23 @@ if ($acao === 'csv') {
             $porEmpresa[$chave]['qtdPagto']++;
             $totalGeral['qtdPagto']++;
         }
+        if ($totalRecibos > 0) {
+            $porEmpresa[$chave]['qtdRecibos']++;
+            $totalGeral['qtdRecibos'] = ($totalGeral['qtdRecibos'] ?? 0) + 1;
+        }
 
         $totalGeral['qtd']++;
-        $totalGeral['aux']      += $aux;
-        $totalGeral['va']       += $va;
-        $totalGeral['aj']       += $aj;
-        $totalGeral['comissao'] += $com;
-        $totalGeral['bruto']    += $bruto;
-        $totalGeral['liquido']  += $liquido;
-        $totalGeral['liqCalc']  += $liqCalc;
+        $totalGeral['aux']          += $aux;
+        $totalGeral['va']           += $va;
+        $totalGeral['aj']           += $aj;
+        $totalGeral['comissao']     += $com;
+        $totalGeral['bruto']        += $bruto;
+        $totalGeral['liquido']      += $liquido;
+        $totalGeral['liqCalc']      += $liqCalc;
+        $totalGeral['vale_gas']      = ($totalGeral['vale_gas'] ?? 0) + $vg;
+        $totalGeral['prestacao']     = ($totalGeral['prestacao'] ?? 0) + $ps;
+        $totalGeral['premiacao_tot'] = ($totalGeral['premiacao_tot'] ?? 0) + $pm;
+        $totalGeral['totalRecibos']  = ($totalGeral['totalRecibos'] ?? 0) + $totalRecibos;
         if ($liquido > 0 || $bruto > 0) {
             $temSalarios = true;
         }
@@ -1162,7 +1252,9 @@ if ($acao === 'csv') {
     // por tipo de documento que vai ser gerado. Inclui coluna de Comissão
     // quando algum funcionário tiver valor (some ao total do documento).
     $temComissao = $totalGeral['comissao'] > 0;
-    $colspan = ($temSalarios ? 10 : 8) + ($temComissao ? 1 : 0);
+    $temRecibosPreview = ($totalGeral['qtdRecibos'] ?? 0) > 0;
+    $colspan = ($temSalarios ? 10 : 8) + ($temComissao ? 1 : 0) + ($temRecibosPreview ? 2 : 0);
+    $temRecibos  = ($totalGeral['qtdRecibos'] ?? 0) > 0;
     $linhas = '';
     foreach ($porEmpresa as $chave => $e) {
         $totalAuxVa  = $e['aux'] + $e['va'];
@@ -1183,8 +1275,12 @@ if ($acao === 'csv') {
                      . '<td class="num">' . $fmt($e['liquido']) . '</td>';
         }
         $linhas .= '<td class="num"><b>' . $fmt($totalAuxVa) . '</b></td>'
-                 . '<td class="num"><b>' . $fmt($totalGeralLinha) . '</b></td>'
-                 . '</tr>';
+                 . '<td class="num"><b>' . $fmt($totalGeralLinha) . '</b></td>';
+        if ($temRecibos) {
+            $linhas .= '<td class="num">' . $e['qtdRecibos'] . '</td>'
+                     . '<td class="num"><b>' . $fmt($e['totalRecibos'] ?? 0) . '</b></td>';
+        }
+        $linhas .= '</tr>';
     }
     if ($linhas === '') {
         $linhas = '<tr><td colspan="' . $colspan . '" style="text-align:center;color:#6b7280;padding:28px 0;white-space:normal;">'
@@ -1214,11 +1310,23 @@ if ($acao === 'csv') {
         $cabecalhoComissao = '';
         $rodapeComissao    = '';
     }
+    // Cabeçalho/rodapé das colunas de Recibos (Vale Gás, Prestação, Premiação).
+    if ($temRecibosPreview) {
+        $qtdRecibosTotal    = $totalGeral['qtdRecibos'] ?? 0;
+        $totalRecibosGeral  = $totalGeral['totalRecibos'] ?? 0.0;
+        $cabecalhoRecibos   = '<th class="num">Qtd Recibos</th><th class="num">Total Recibos</th>';
+        $rodapeRecibos      = '<td class="num">' . $qtdRecibosTotal . '</td>'
+                            . '<td class="num">' . $fmt($totalRecibosGeral) . '</td>';
+    } else {
+        $cabecalhoRecibos = '';
+        $rodapeRecibos    = '';
+    }
 
     // Cards de escolha: cada um só fica habilitado se tiver pelo menos 1
     // funcionário que gere documento daquele tipo.
-    $qtdVales = $totalGeral['qtdVales'] ?? 0;
-    $qtdPagto = $totalGeral['qtdPagto'] ?? 0;
+    $qtdVales   = $totalGeral['qtdVales']   ?? 0;
+    $qtdPagto   = $totalGeral['qtdPagto']   ?? 0;
+    $qtdRecibos = $totalGeral['qtdRecibos'] ?? 0;
 
     if ($qtdVales > 0) {
         $estiloVales       = '';
@@ -1244,6 +1352,19 @@ if ($acao === 'csv') {
         $rotuloTotalPagamento = 'Indisponível';
     }
 
+    $totalRecibosGlobalFmt = $fmt($totalGeral['totalRecibos'] ?? 0);
+    if ($qtdRecibos > 0) {
+        $estiloRecibos       = '';
+        $disabledRecibos     = '';
+        $tagRecibos          = 'RECIBOS';
+        $totalRecibosDisplay = "{$qtdRecibos} doc(s) &middot; Total: {$totalRecibosGlobalFmt}";
+    } else {
+        $estiloRecibos       = 'style="opacity:.55;cursor:not-allowed;"';
+        $disabledRecibos     = 'disabled title="Nenhum funcionário com Vale Gás, Prestação de Serviços ou Premiação na planilha"';
+        $tagRecibos          = 'INDISPONÍVEL';
+        $totalRecibosDisplay = 'Nenhum funcionário com dados de recibos';
+    }
+
     $htmlErro = $erroLeitura !== ''
         ? '<div class="aviso" style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:10px 14px;border-radius:8px;margin-bottom:16px;">'
           . '⚠ ' . htmlspecialchars($erroLeitura) . '</div>'
@@ -1263,6 +1384,7 @@ if ($acao === 'csv') {
     --label:#334155; --prim:#2563eb; --prim-d:#1d4ed8; --prim-soft:#eef4ff;
     --ok:#059669; --ok-soft:#ecfdf5; --ok-line:#a7f3d0;
     --warn:#d97706; --warn-soft:#fffbeb; --warn-line:#fde68a;
+    --rec:#7c3aed; --rec-soft:#f5f3ff; --rec-line:#ddd6fe;
   }
   *{box-sizing:border-box;}
   body{font-family:"Inter",system-ui,"Segoe UI",Roboto,Arial,sans-serif;
@@ -1288,7 +1410,7 @@ if ($acao === 'csv') {
   .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px 18px;margin:0 0 18px;font-size:13.5px;}
   .meta div{color:var(--mut);}
   .meta b{color:var(--ink);font-weight:600;}
-  .escolha{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:10px;}
+  .escolha{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:10px;}
   .opcao{border:2px solid var(--line);border-radius:12px;padding:20px 22px;cursor:pointer;
          background:#fff;transition:border-color .15s, box-shadow .15s, transform .04s;
          display:flex;flex-direction:column;gap:10px;}
@@ -1298,9 +1420,11 @@ if ($acao === 'csv') {
   .opcao .tag{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;border-radius:999px;align-self:flex-start;}
   .opcao.comprovante .tag{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-line);}
   .opcao.pagamento .tag{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line);}
+  .opcao.recibos .tag{background:var(--rec-soft);color:var(--rec);border:1px solid var(--rec-line);}
   .opcao .total{font-size:17px;font-weight:800;color:var(--ink);letter-spacing:-.01em;margin-top:6px;}
   .opcao.comprovante .total{color:var(--warn);}
   .opcao.pagamento .total{color:var(--ok);}
+  .opcao.recibos .total{color:var(--rec);}
   .acoes{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px;}
   .btn{border:1px solid transparent;border-radius:10px;padding:11px 18px;font-size:14px;font-weight:600;
        cursor:pointer;font-family:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:8px;
@@ -1314,6 +1438,9 @@ if ($acao === 'csv') {
          text-align:justify;hyphens:auto;word-spacing:.5px;}
   .aviso b{color:var(--ink);font-weight:600;}
   .aviso i{color:#475569;font-style:normal;}
+  @media (max-width:1080px){
+    .escolha{grid-template-columns:1fr 1fr;}
+  }
   @media (max-width:920px){
     .escolha{grid-template-columns:1fr;}
   }
@@ -1357,6 +1484,7 @@ if ($acao === 'csv') {
           {$cabecalhoSalario}
           <th class="num">Total (Vales)</th>
           <th class="num">Total (geral)</th>
+          {$cabecalhoRecibos}
         </tr>
       </thead>
       <tbody>
@@ -1374,6 +1502,7 @@ if ($acao === 'csv') {
           {$rodapeSalario}
           <td class="num">{$fmt($gtotalAuxVa)}</td>
           <td class="num">{$fmt($gtotalGeral)}</td>
+          {$rodapeRecibos}
         </tr>
       </tfoot>
     </table>
@@ -1404,11 +1533,18 @@ if ($acao === 'csv') {
           <p>{$legendaPagamento}</p>
           <div class="total">{$rotuloTotalPagamento}</div>
         </div>
+        <div class="opcao recibos" data-tipo="comprovante_recibos" onclick="marcarTipo(this, 'comprovante_recibos')" {$estiloRecibos}>
+          <span class="tag">{$tagRecibos}</span>
+          <h3>🧾 Recibos</h3>
+          <p>Gera recibo com os valores de <b>Auxílio Alimentação, Auxílio Combustível, Vale Gás, Prestação de Serviços e Premiação</b> — apenas os campos com valor.</p>
+          <div class="total">{$totalRecibosDisplay}</div>
+        </div>
       </div>
 
       <div class="acoes">
         <button type="submit" name="tipo" value="comprovante" class="btn btn-prim" style="background:#d97706" {$disabledVales}>⬇ Gerar Comprovantes de Vales (.zip)</button>
         <button type="submit" name="tipo" value="comprovante_pagamento" class="btn btn-prim" style="background:#059669" {$disabledPagamento}>⬇ Gerar Comprovantes de Pagamento (.zip)</button>
+        <button type="submit" name="tipo" value="comprovante_recibos" class="btn btn-prim" style="background:#7c3aed" {$disabledRecibos}>⬇ Gerar Recibos (.zip)</button>
         <a href="index.php" class="btn btn-sec">← Voltar</a>
       </div>
     </section>
@@ -1424,6 +1560,7 @@ if ($acao === 'csv') {
     const cores = {
       comprovante:            { borda: '#d97706', sombra: 'rgba(217,119,6,.18)' },
       comprovante_pagamento:  { borda: '#059669', sombra: 'rgba(5,150,105,.18)' },
+      comprovante_recibos:    { borda: '#7c3aed', sombra: 'rgba(124,58,237,.18)' },
     };
     el.style.borderColor = cores[tipo].borda;
     el.style.boxShadow   = '0 0 0 3px ' + cores[tipo].sombra;
@@ -1866,9 +2003,12 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
     $colNome = -1;
     $colAux  = -1;
     $colVa   = -1;
-    $colComissao       = -1;
-    $colSalarioBruto   = -1;
-    $colSalarioLiquido = -1;
+    $colComissao         = -1;
+    $colSalarioBruto     = -1;
+    $colSalarioLiquido   = -1;
+    $colValeGas          = -1;
+    $colPrestacaoServicos = -1;
+    $colPremiacao        = -1;
     foreach ($cabecalho as $idx => $rotulo) {
         $n = strtolower(semAcento(trim((string) $rotulo)));
         if ($colNome === -1 && (strpos($n, 'funcion') !== false || strpos($n, 'nome') !== false || $n === 'funcionario')) {
@@ -1900,6 +2040,18 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         if ($colSalarioLiquido === -1 && (strpos($n, 'salario liquido') !== false || strpos($n, 'liquido') !== false)) {
             $colSalarioLiquido = $idx;
         }
+        // Novos campos para o Comprovante de Recibos
+        if (strpos($n, 'vale g') !== false || (strpos($n, 'gas') !== false && strpos($n, 'vale') !== false)) {
+            $colValeGas = $idx;
+        }
+        if (strpos($n, 'servic') !== false && (strpos($n, 'prest') !== false || strpos($n, 'servic') !== false)) {
+            $colPrestacaoServicos = $idx;
+        }
+        // Premiação: usa a ÚLTIMA ocorrência pra pegar a coluna da seção "recibos"
+        // (em planilhas FS a primeira ocorrência é coluna da folha, a segunda é recibos)
+        if (strpos($n, 'premia') !== false || strpos($n, 'premiacao') !== false) {
+            $colPremiacao = $idx;
+        }
     }
     // Se nem "VA" nem "V.A." foram achados, procura por nome idêntico
     if ($colVa === -1) {
@@ -1914,8 +2066,14 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
     // A lógica atual com contains já pega "Sálario Bruto" primeiro se a
     // iteração for na ordem (e como o cabeçalho vem na ordem das colunas,
     // sim). Nada a fazer aqui.
-    if ($colNome === -1 || $colAux === -1 || $colVa === -1) {
-        // Sem mapeamento, não dá pra continuar
+    if ($colNome === -1) {
+        // Sem coluna de nome, não dá pra continuar
+        return [];
+    }
+    // Se não encontrou nenhuma coluna de valor (nem padrão nem recibos), retorna vazio
+    $temColunaValor = $colAux !== -1 || $colVa !== -1
+        || $colValeGas !== -1 || $colPrestacaoServicos !== -1 || $colPremiacao !== -1;
+    if (!$temColunaValor) {
         return [];
     }
 
@@ -1950,17 +2108,16 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
             continue;
         }
 
-        $comb = parseValorFolha($cells[$colAux] ?? '');
-        $va   = parseValorFolha($cells[$colVa] ?? '');
+        $comb = $colAux !== -1 ? parseValorFolha($cells[$colAux] ?? '') : 0.0;
+        $va   = $colVa  !== -1 ? parseValorFolha($cells[$colVa]  ?? '') : 0.0;
         $comissaoFolha = $colComissao !== -1 ? parseValorFolha($cells[$colComissao] ?? '') : 0.0;
         $brutoFolha   = $colSalarioBruto   !== -1 ? parseValorFolha($cells[$colSalarioBruto]   ?? '') : 0.0;
         $liquidoFolha = $colSalarioLiquido !== -1 ? parseValorFolha($cells[$colSalarioLiquido] ?? '') : 0.0;
-        // Mantém o funcionário SE tiver algum ADIANTAMENTO: Aux, VA ou AJ.CUSTO.
-        // Quem só tem salário (sem Aux/VA) é descartado — esses funcionários
-        // não pegaram adiantamento e não geram Recibo de Vales nem
-        // Comprovante de Pagamento no nosso sistema. Os dois documentos são
-        // sobre adiantamentos; o salário puro vai no contracheque normal.
-        if ($comb <= 0 && $va <= 0) {
+        $valeGasFolha          = $colValeGas           !== -1 ? parseValorFolha($cells[$colValeGas]           ?? '') : 0.0;
+        $prestacaoServicosFolha = $colPrestacaoServicos !== -1 ? parseValorFolha($cells[$colPrestacaoServicos] ?? '') : 0.0;
+        $premiacaoFolha        = $colPremiacao          !== -1 ? parseValorFolha($cells[$colPremiacao]         ?? '') : 0.0;
+        // Mantém o funcionário se tiver qualquer valor a registrar
+        if ($comb <= 0 && $va <= 0 && $valeGasFolha <= 0 && $prestacaoServicosFolha <= 0 && $premiacaoFolha <= 0) {
             continue;
         }
 
@@ -1973,14 +2130,17 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         }
 
         $funcionarios[] = [
-            'empresa'         => $empresa,
-            'nome'            => $nomeLimpo,
-            'combustivel'     => $comb,
-            'alimentacao'     => $va,
-            'aj_custo'        => 0.0,
-            'comissao'        => $comissaoFolha,
-            'salario_bruto'   => $brutoFolha,
-            'salario_liquido' => $liquidoFolha,
+            'empresa'              => $empresa,
+            'nome'                 => $nomeLimpo,
+            'combustivel'          => $comb,
+            'alimentacao'          => $va,
+            'aj_custo'             => 0.0,
+            'comissao'             => $comissaoFolha,
+            'salario_bruto'        => $brutoFolha,
+            'salario_liquido'      => $liquidoFolha,
+            'vale_gas'             => $valeGasFolha,
+            'prestacao_servicos'   => $prestacaoServicosFolha,
+            'premiacao'            => $premiacaoFolha,
         ];
     }
     return $funcionarios;

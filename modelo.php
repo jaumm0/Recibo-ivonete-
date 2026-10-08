@@ -33,13 +33,18 @@ function textosPadraoRecibo(): array
     return [
         'titulo_comprovante_vales'      => 'COMPROVANTE DE VALES',
         'titulo_comprovante_pagamento'  => 'COMPROVANTE DE PAGAMENTO',
+        'titulo_comprovante_recibos'    => 'RECIBOS',
         'rotulo_auxilio'                => 'Auxílio combustível',
         'rotulo_vale'                   => 'Vale alimentação',
         'rotulo_aj'                     => 'AJ. CUSTO',
         'rotulo_comissao'               => 'Comissão',
+        'rotulo_vale_gas'               => 'Vale Gás',
+        'rotulo_prestacao_servicos'     => 'Prestação de Serviços',
+        'rotulo_premiacao'              => 'Premiação',
         'frase_recebi'                  => 'Recebi da',
         'frase_referente_aux_va'        => 'referente a Auxílio Combustível e Vale Alimentação',
         'frase_referente_aux_va_aj'     => 'referente a Auxílio Combustível, Vale Alimentação e AJ. CUSTO',
+        'frase_referente_recibos'       => 'referente a recibos conforme descrito abaixo.',
         'frase_pagamento'               => 'a título de pagamento de salário líquido',
         'fechamento'                    => 'E por ser verdade assino o presente recibo.',
         'conforme_descrito'             => 'conforme descrito abaixo.',
@@ -155,6 +160,8 @@ function corpoDoRecibo(array $d): string
     $temCom = ((float) ($d['comissao'] ?? 0)) > 0;
     if ($tipo === 'comprovante_pagamento') {
         $fraseItens = textoRecibo('frase_pagamento') . ' ';
+    } elseif ($tipo === 'comprovante_recibos') {
+        $fraseItens = textoRecibo('frase_referente_recibos') . ' ';
     } elseif ($tipo === 'comprovante') {
         // Se tem AJ. CUSTO, cita os três; senão só Aux + VA.
         $fraseItens = $temAj
@@ -164,7 +171,7 @@ function corpoDoRecibo(array $d): string
         $fraseItens = '';
     }
     // Quando há comissão, acrescenta "e Comissão" à relação de itens.
-    if ($temCom) {
+    if ($temCom && $tipo !== 'comprovante_recibos') {
         $fraseItens = rtrim($fraseItens) . ' e Comissão ';
     }
 
@@ -172,6 +179,11 @@ function corpoDoRecibo(array $d): string
     // Ex: "a importância de R$ 207,90 (Duzentos e sete reais e noventa centavos)".
     $recebi    = textoRecibo('frase_recebi');
     $conforme  = textoRecibo('conforme_descrito');
+    if ($tipo === 'comprovante_recibos') {
+        // Para recibos: frase sem "conforme descrito abaixo" extra (já incluído em frase_referente_recibos)
+        return "{$recebi} {$empresa}, a importância de {$valorNum} ({$extenso}) "
+             . "{$fraseItens}{$partePeriodo}";
+    }
     return "{$recebi} {$empresa}, a importância de {$valorNum} ({$extenso}) "
          . "{$fraseItens}{$partePeriodo}{$conforme}";
 }
@@ -202,9 +214,14 @@ function reciboHTML(array $d, bool $autoPrint = false): string
     $alimentacao = formatarMoeda($d['alimentacao'] ?? 0);
     $ajCusto     = formatarMoeda($d['aj_custo'] ?? 0);
     $comissao    = formatarMoeda($d['comissao'] ?? 0);
+    $valeGas          = formatarMoeda($d['vale_gas'] ?? 0);
+    $prestacaoServicos = formatarMoeda($d['prestacao_servicos'] ?? 0);
+    $premiacao        = formatarMoeda($d['premiacao'] ?? 0);
     $tipo        = (string) ($d['tipo'] ?? 'comprovante');
     if ($tipo === 'comprovante_pagamento') {
         $tituloDoc = textoRecibo('titulo_comprovante_pagamento') ?: 'COMPROVANTE DE PAGAMENTO';
+    } elseif ($tipo === 'comprovante_recibos') {
+        $tituloDoc = textoRecibo('titulo_comprovante_recibos') ?: 'RECIBOS';
     } else {
         $tituloDoc = textoRecibo('titulo_comprovante_vales') ?: 'COMPROVANTE DE VALES';
     }
@@ -219,6 +236,9 @@ function reciboHTML(array $d, bool $autoPrint = false): string
     $rotVale     = htmlspecialchars(textoRecibo('rotulo_vale'));
     $rotAj       = htmlspecialchars(textoRecibo('rotulo_aj'));
     $rotCom      = htmlspecialchars(textoRecibo('rotulo_comissao'));
+    $rotValeGas  = htmlspecialchars(textoRecibo('rotulo_vale_gas'));
+    $rotPrestacao = htmlspecialchars(textoRecibo('rotulo_prestacao_servicos'));
+    $rotPremiacao = htmlspecialchars(textoRecibo('rotulo_premiacao'));
     $fechamento  = htmlspecialchars(textoRecibo('fechamento'));
 
     // Linha extra de "AJ. CUSTO" só aparece quando tem valor. Se o AJ
@@ -236,11 +256,43 @@ function reciboHTML(array $d, bool $autoPrint = false): string
     // para alguns funcionários, ex.: aba FS da folha de pagamento).
     $mostrarCom = ((float) ($d['comissao'] ?? 0)) > 0;
     $linhaCom = '';
-    if ($mostrarCom) {
+    if ($mostrarCom && $tipo !== 'comprovante_recibos') {
         $linhaCom = '<div class="linha">'
                  . '<span class="rot">' . $rotCom . '</span>'
                  . '<span class="vlr">' . $comissao . '</span>'
                  . '</div>';
+    }
+
+    // Monta o bloco de linhas da descrição
+    if ($tipo === 'comprovante_recibos') {
+        // Para recibos: apenas os 5 campos com valor > 0
+        $linhasDescricao = '';
+        $camposRecibos = [
+            $rotAuxilio   => (float)($d['combustivel'] ?? 0),
+            $rotVale      => (float)($d['alimentacao'] ?? 0),
+            $rotValeGas   => (float)($d['vale_gas'] ?? 0),
+            $rotPrestacao => (float)($d['prestacao_servicos'] ?? 0),
+            $rotPremiacao => (float)($d['premiacao'] ?? 0),
+        ];
+        foreach ($camposRecibos as $rot => $val) {
+            if ($val > 0) {
+                $linhasDescricao .= '<div class="linha">'
+                    . '<span class="rot">' . $rot . '</span>'
+                    . '<span class="vlr">' . formatarMoeda($val) . '</span>'
+                    . '</div>';
+            }
+        }
+    } else {
+        $linhasDescricao = '<div class="linha">'
+            . '<span class="rot">' . $rotAuxilio . '</span>'
+            . '<span class="vlr">' . $combustivel . '</span>'
+            . '</div>'
+            . '<div class="linha">'
+            . '<span class="rot">' . $rotVale . '</span>'
+            . '<span class="vlr">' . $alimentacao . '</span>'
+            . '</div>'
+            . $linhaAj
+            . $linhaCom;
     }
 
     // Logo: usa a imagem da empresa (igual ao DOCX) embutida em base64.
@@ -370,16 +422,7 @@ function reciboHTML(array $d, bool $autoPrint = false): string
     <p class="corpo">{$corpo}</p>
 
     <div class="descricao">
-      <div class="linha">
-        <span class="rot">{$rotAuxilio}</span>
-        <span class="vlr">{$combustivel}</span>
-      </div>
-      <div class="linha">
-        <span class="rot">{$rotVale}</span>
-        <span class="vlr">{$alimentacao}</span>
-      </div>
-      {$linhaAj}
-      {$linhaCom}
+      {$linhasDescricao}
     </div>
 
     <p class="fechamento">
