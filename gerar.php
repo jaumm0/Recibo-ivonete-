@@ -2003,23 +2003,22 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         // não tem "combustível" mas tem essa coluna. Sem esse critério, o loop
         // continuaria e encontraria o cabeçalho da seção "PAGAMENTO" (que tem
         // "Combustível"), lendo dados errados para a aba Laboratório.
-        $temFuncionarios = in_array('funcionarios', $txts, true) || in_array('funcionario', $txts, true);
-        $temValorRecibos = in_array('servicos prestados', $txts, true);
-        if (!$temValorRecibos) {
-            foreach ($txts as $_t) {
-                if (strpos($_t, 'vale g') !== false || strpos($_t, 'premia') !== false) {
-                    $temValorRecibos = true;
-                    break;
-                }
-            }
-        }
+        // "Serviços Prestados" identifica a aba Laboratório: o cabeçalho
+        // principal não tem "combustível", então sem esse critério o loop
+        // continuaria até a seção PAGAMENTO (que tem "Combustível" via
+        // fórmula referenciando Serviços Prestados) e leria dados errados.
+        // Não incluímos "Vale Gás" ou "Premiação" aqui porque o cabeçalho
+        // PAGAMENTO da Clínica também os tem — ele deve continuar sendo
+        // detectado pela condição com "combustivel" (abaixo).
+        $temServicosMain = in_array('funcionarios', $txts, true)
+            && in_array('servicos prestados', $txts, true);
         if (in_array('aux. combustivel', $txts, true) || in_array('aux. combust', $txts, true)
             || in_array('auxilio combustivel', $txts, true)
             || (in_array('combustivel', $txts, true) && (in_array('salario bruto', $txts, true)
                 || in_array('salario', $txts, true) || in_array('salario liquido', $txts, true)))
             || (in_array('aux. combustivel', $txts, true) && in_array('salario', $txts, true))
-            // Laboratório / Casa Cassiane / Clínica com colunas de recibos
-            || ($temFuncionarios && $temValorRecibos)) {
+            // Laboratório: cabeçalho principal com "Serviços Prestados"
+            || $temServicosMain) {
             $cabecalho = $r['cells'];
             $cabecalhoLinha = $r['row'];
             break;
