@@ -1997,11 +1997,10 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         $empresa = 'clinica'; // padrão conservador
     }
 
-    // 2) Descobre a linha do cabeçalho (geralmente R2) e mapeia coluna → chave.
-    //    Cabeçalho esperado (case-insensitive, sem acentos):
-    //      "Funcionários" → nome
-    //      "Aux. Combustível" → combustivel
-    //      "VA" → alimentacao
+    // 2) Localiza o cabeçalho da TABELA PRINCIPAL (a 1ª linha com "Funcionários"
+    //    + alguma coluna de valor). A tabela principal lista TODOS os
+    //    funcionários; a seção "PAGAMENTO" mais abaixo é só um resumo de
+    //    combustível/VA e NÃO deve ser a fonte da lista (perde funcionários).
     $cabecalho = null;
     $cabecalhoLinha = 0;
     foreach ($rows as $r) {
@@ -2009,118 +2008,123 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         foreach ($r['cells'] as $v) {
             $txts[] = strtolower(semAcento(trim((string) $v)));
         }
-        // Detecta linha de cabeçalho principal (antes da seção PAGAMENTO).
-        // Critérios: tem "Funcionários" + coluna de valor reconhecível.
-        // "Serviços Prestados" identifica a aba Laboratório, cujo cabeçalho
-        // não tem "combustível" mas tem essa coluna. Sem esse critério, o loop
-        // continuaria e encontraria o cabeçalho da seção "PAGAMENTO" (que tem
-        // "Combustível"), lendo dados errados para a aba Laboratório.
-        // "Serviços Prestados" identifica a aba Laboratório: o cabeçalho
-        // principal não tem "combustível", então sem esse critério o loop
-        // continuaria até a seção PAGAMENTO (que tem "Combustível" via
-        // fórmula referenciando Serviços Prestados) e leria dados errados.
-        // Não incluímos "Vale Gás" ou "Premiação" aqui porque o cabeçalho
-        // PAGAMENTO da Clínica também os tem — ele deve continuar sendo
-        // detectado pela condição com "combustivel" (abaixo).
-        $temServicosMain = in_array('funcionarios', $txts, true)
-            && in_array('servicos prestados', $txts, true);
-        if (in_array('aux. combustivel', $txts, true) || in_array('aux. combust', $txts, true)
-            || in_array('auxilio combustivel', $txts, true)
-            || (in_array('combustivel', $txts, true) && (in_array('salario bruto', $txts, true)
-                || in_array('salario', $txts, true) || in_array('salario liquido', $txts, true)))
-            || (in_array('aux. combustivel', $txts, true) && in_array('salario', $txts, true))
-            // Laboratório: cabeçalho principal com "Serviços Prestados"
-            || $temServicosMain) {
+        $temNome = false;
+        foreach ($txts as $t) {
+            if (strpos($t, 'funcion') !== false || $t === 'nome') { $temNome = true; break; }
+        }
+        if (!$temNome) continue;
+        $temValor = false;
+        foreach ($txts as $t) {
+            if (strpos($t, 'salario') !== false || strpos($t, 'combust') !== false
+                || strpos($t, 'servic') !== false || strpos($t, 'vale g') !== false
+                || strpos($t, 'premia') !== false || $t === 'va') {
+                $temValor = true; break;
+            }
+        }
+        if ($temValor) {
             $cabecalho = $r['cells'];
             $cabecalhoLinha = $r['row'];
             break;
         }
     }
     if ($cabecalho === null) {
-        // Sem cabeçalho reconhecível → não tem como extrair
         return [];
     }
 
-    $colNome = -1;
-    $colAux  = -1;
-    $colVa   = -1;
-    $colComissao         = -1;
-    $colSalarioBruto     = -1;
-    $colSalarioLiquido   = -1;
-    $colValeGas          = -1;
-    $colPrestacaoServicos = -1;
-    $colPremiacao        = -1;
+    // 2b) Mapeia as colunas da tabela principal.
+    $colNome = -1; $colAux = -1; $colVa = -1;
+    $colComissao = -1; $colSalarioBruto = -1; $colSalarioLiquido = -1;
+    $colValeGas = -1; $colPrestacaoServicos = -1; $colPremiacao = -1;
     foreach ($cabecalho as $idx => $rotulo) {
         $n = strtolower(semAcento(trim((string) $rotulo)));
-        if ($colNome === -1 && (strpos($n, 'funcion') !== false || strpos($n, 'nome') !== false || $n === 'funcionario')) {
+        if ($n === '') continue;
+        if ($colNome === -1 && (strpos($n, 'funcion') !== false || strpos($n, 'nome') !== false)) {
             $colNome = $idx;
         }
-        if ($colAux === -1 && (strpos($n, 'aux. combust') !== false || strpos($n, 'auxilio combust') !== false
-            || strpos($n, 'combust') !== false)) {
+        if ($colAux === -1 && (strpos($n, 'aux. combust') !== false
+            || strpos($n, 'auxilio combust') !== false || strpos($n, 'combust') !== false)) {
             $colAux = $idx;
         }
-        // Comissão: aceita "Comissão", "Comissao". Só aparece na aba FS,
-        // mas a detecção é genérica — nas abas sem a coluna fica -1 (zerada).
-        if ($colComissao === -1 && strpos($n, 'comiss') !== false) {
+        // Comissão/Premiação: ÚLTIMA ocorrência (na FS a 1ª é coluna da folha,
+        // a 2ª é a da seção de recibos/pagamento, que é a que queremos).
+        if (strpos($n, 'comiss') !== false) {
             $colComissao = $idx;
         }
-        // VA: aceita "VA", "V.A." (com pontos) e "Vale Alimentação/ Alim.".
-        // NÃO aceita "Vale" sozinho — no Lab, "Vale" é um ajuste (-500 etc).
-        if ($colVa === -1 && (trim($n) === 'va' || trim($n) === 'v.a.' || trim($n) === 'v.a'
+        if (strpos($n, 'premia') !== false) {
+            $colPremiacao = $idx;
+        }
+        // VA: só "VA"/"V.A." ou "Vale Alimentação". NÃO aceita "Vale" sozinho.
+        if ($colVa === -1 && ($n === 'va' || $n === 'v.a.' || $n === 'v.a'
             || strpos($n, 'vale aliment') !== false || strpos($n, 'vale alim') !== false)) {
             $colVa = $idx;
         }
-        // Salário Bruto: aceita "Salário Bruto", "Sálario Bruto" (sem acento
-        // — variação que aparece na aba Laboratório), ou "Salário"/"Sálario"
-        // quando o rótulo contém "bruto" OU quando ainda não há coluna Bruto
-        // e a coluna é a ÚNICA de salário (caso comum).
         if ($colSalarioBruto === -1 && (strpos($n, 'salario bruto') !== false
-            || strpos($n, 'salario') !== false && strpos($n, 'bruto') !== false)) {
+            || (strpos($n, 'salario') !== false && strpos($n, 'bruto') !== false))) {
             $colSalarioBruto = $idx;
         }
-        if ($colSalarioLiquido === -1 && (strpos($n, 'salario liquido') !== false || strpos($n, 'liquido') !== false)) {
+        if ($colSalarioLiquido === -1 && (strpos($n, 'salario liquido') !== false
+            || strpos($n, 'liquido') !== false)) {
             $colSalarioLiquido = $idx;
         }
-        // Novos campos para o Comprovante de Recibos
-        if (strpos($n, 'vale g') !== false || (strpos($n, 'gas') !== false && strpos($n, 'vale') !== false)) {
+        if ($colValeGas === -1 && strpos($n, 'vale g') !== false) {
             $colValeGas = $idx;
         }
-        if (strpos($n, 'servic') !== false && (strpos($n, 'prest') !== false || strpos($n, 'servic') !== false)) {
+        if ($colPrestacaoServicos === -1 && strpos($n, 'servic') !== false && strpos($n, 'prest') !== false) {
             $colPrestacaoServicos = $idx;
         }
-        // Premiação: usa a ÚLTIMA ocorrência pra pegar a coluna da seção "recibos"
-        // (em planilhas FS a primeira ocorrência é coluna da folha, a segunda é recibos)
-        if (strpos($n, 'premia') !== false || strpos($n, 'premiacao') !== false) {
-            $colPremiacao = $idx;
-        }
     }
-    // Se nem "VA" nem "V.A." foram achados, procura por nome idêntico
-    if ($colVa === -1) {
-        foreach ($cabecalho as $idx => $rotulo) {
-            $n = strtolower(trim((string) $rotulo));
-            if ($n === 'va' || $n === 'v.a.') { $colVa = $idx; break; }
-        }
-    }
-    // Se "Sálario" foi marcado mas tem "Salário" + "Sálario Bruto" (caso do
-    // Lab), o primeiro detectado pelo contains "salario" pode ser o errado.
-    // O Lab tem "Sálario Bruto" (col 2) e "Salário" (col 3) — queremos o 2.
-    // A lógica atual com contains já pega "Sálario Bruto" primeiro se a
-    // iteração for na ordem (e como o cabeçalho vem na ordem das colunas,
-    // sim). Nada a fazer aqui.
     if ($colNome === -1) {
-        // Sem coluna de nome, não dá pra continuar
         return [];
     }
-    // Se não encontrou nenhuma coluna de valor (nem padrão nem recibos), retorna vazio
-    $temColunaValor = $colAux !== -1 || $colVa !== -1
-        || $colValeGas !== -1 || $colPrestacaoServicos !== -1 || $colPremiacao !== -1;
-    if (!$temColunaValor) {
-        return [];
+    $sheetHasServicos = ($colPrestacaoServicos !== -1);
+
+    // 3) Lê a seção PAGAMENTO (quando existe) para combustível/VA, por nome.
+    //    Em várias abas a coluna "Combustível" do PAGAMENTO é só uma fórmula
+    //    que replica um campo de recibo (Serviços Prestados na Laboratório,
+    //    Premiação na FS); esses aliases são filtrados no merge (passo 4).
+    $pagto = [];
+    $pColNome = -1; $pColComb = -1; $pColVa = -1;
+    $achouPagtoHeader = false;
+    $vistoMarcadorPagto = false;
+    foreach ($rows as $r) {
+        $txts = [];
+        foreach ($r['cells'] as $idx => $v) {
+            $txts[$idx] = strtolower(semAcento(trim((string) $v)));
+        }
+        if (!$vistoMarcadorPagto) {
+            foreach ($txts as $t) {
+                if ($t === 'pagamento') { $vistoMarcadorPagto = true; break; }
+            }
+            continue;
+        }
+        if (!$achouPagtoHeader) {
+            $temNomeP = false; $temCombP = false;
+            foreach ($txts as $t) {
+                if (strpos($t, 'funcion') !== false || strpos($t, 'nome') !== false) $temNomeP = true;
+                if (strpos($t, 'combust') !== false) $temCombP = true;
+            }
+            if ($temNomeP && $temCombP) {
+                foreach ($txts as $idx => $t) {
+                    if ($pColNome === -1 && (strpos($t, 'funcion') !== false || strpos($t, 'nome') !== false)) $pColNome = $idx;
+                    if ($pColComb === -1 && strpos($t, 'combust') !== false) $pColComb = $idx;
+                    if ($pColVa === -1 && ($t === 'va' || $t === 'v.a.' || strpos($t, 'vale alim') !== false)) $pColVa = $idx;
+                }
+                $achouPagtoHeader = true;
+            }
+            continue;
+        }
+        if ($pColNome === -1) continue;
+        $nm = trim((string) ($r['cells'][$pColNome] ?? ''));
+        $nmKey = strtolower(semAcento($nm));
+        if ($nm === '' || $nmKey === 'total' || strpos($nmKey, 'funcion') === 0) continue;
+        $pagto[$nmKey] = [
+            'comb' => $pColComb !== -1 ? parseValorFolha($r['cells'][$pColComb] ?? '') : 0.0,
+            'va'   => $pColVa   !== -1 ? parseValorFolha($r['cells'][$pColVa]   ?? '') : 0.0,
+        ];
     }
 
-    // 3) Itera as linhas DEPOIS do cabeçalho, ATÉ o primeiro "PAGAMENTO" / "Obs".
-    //    A folha de Agosto tem dois blocos (FOLHA + PAGAMENTO) e várias seções
-    //    de observações. Só nos interessa o primeiro bloco.
+    // 4) Itera as linhas da TABELA PRINCIPAL (todos os funcionários), parando
+    //    no marcador "PAGAMENTO" / "Obs".
     $funcionarios = [];
     $parou = false;
     foreach ($rows as $r) {
@@ -2131,8 +2135,7 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         $nomeBruto = trim((string) ($cells[$colNome] ?? ''));
         $nomeNorm  = strtolower(semAcento($nomeBruto));
 
-        // Marcadores de fim do bloco de funcionários. Tudo depois disso é
-        // ignorado (segundo bloco "PAGAMENTO", observações, etc.).
+        // Marcadores de fim do bloco principal.
         if ($nomeNorm === 'pagamento' || $nomeNorm === 'obs' || $nomeNorm === 'observacoes'
             || $nomeNorm === 'observações' || strpos($nomeNorm, 'funcionario') === 0
             || strpos($nomeNorm, 'folha de pagamento') === 0) {
@@ -2144,7 +2147,6 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         if ($nomeBruto === '') {
             continue;
         }
-        // Pula linhas de cabeçalho repetido e totais
         if ($nomeNorm === 'total' || $nomeNorm === 'funcionarios' || $nomeNorm === 'funcionário') {
             continue;
         }
@@ -2157,8 +2159,32 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         $valeGasFolha          = $colValeGas           !== -1 ? parseValorFolha($cells[$colValeGas]           ?? '') : 0.0;
         $prestacaoServicosFolha = $colPrestacaoServicos !== -1 ? parseValorFolha($cells[$colPrestacaoServicos] ?? '') : 0.0;
         $premiacaoFolha        = $colPremiacao          !== -1 ? parseValorFolha($cells[$colPremiacao]         ?? '') : 0.0;
-        // Mantém o funcionário se tiver qualquer valor a registrar
-        if ($comb <= 0 && $va <= 0 && $valeGasFolha <= 0 && $prestacaoServicosFolha <= 0 && $premiacaoFolha <= 0) {
+
+        // Complementa combustível/VA da seção PAGAMENTO quando a tabela
+        // principal não tem essas colunas (Clínica, FS).
+        if (isset($pagto[$nomeNorm])) {
+            $pc = $pagto[$nomeNorm]['comb'];
+            $pv = $pagto[$nomeNorm]['va'];
+            if ($colAux === -1 && $pc > 0) {
+                // Ignora o "alias": na Laboratório o combustível do PAGAMENTO
+                // só replica Serviços Prestados; na FS replica a Premiação.
+                $ehAliasServicos  = $sheetHasServicos;
+                $ehAliasPremiacao = ($premiacaoFolha > 0 && abs($pc - $premiacaoFolha) < 0.01);
+                if (!$ehAliasServicos && !$ehAliasPremiacao) {
+                    $comb = $pc;
+                }
+            }
+            if ($colVa === -1 && $pv > 0) {
+                $va = $pv;
+            }
+        }
+
+        // Mantém o funcionário se tiver QUALQUER valor (salário ou benefício).
+        // Assim ele aparece no Comprovante de Pagamento mesmo sem vales; o
+        // filtro por tipo de documento acontece depois em montarDados.
+        if ($brutoFolha <= 0 && $liquidoFolha <= 0 && $comb <= 0 && $va <= 0
+            && $valeGasFolha <= 0 && $prestacaoServicosFolha <= 0 && $premiacaoFolha <= 0
+            && $comissaoFolha <= 0) {
             continue;
         }
 
