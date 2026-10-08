@@ -494,63 +494,77 @@ function preencherXmlDoModelo(string $xml, array $d): string
         1
     );
 
-    // 4) Valor do combustível
-    if ($tipo === 'comprovante_recibos' && $combustivelVal == 0) {
-        // Para recibos, remove o parágrafo inteiro se o valor for zero.
-        $xml = preg_replace('/<w:p\b[^>]*>(?:(?!<\/w:p>).)*\{Valor de combustivel\}(?:(?!<\/w:p>).)*<\/w:p>/s', '', $xml, 1);
-    } else {
-        $xml = str_replace('{Valor de combustivel}', $combustivel, $xml);
-    }
-
-    // 5) Valor da alimentação (modelo tem "alimentaçao" com ç, sem til).
-    //    Quando há comissão, injetamos um parágrafo extra "Comissão R$ X,XX"
-    //    logo após o parágrafo da alimentação, espelhando o mesmo layout
-    //    (label + tab + "R$" + valor). A âncora é a run inteira do
-    //    placeholder da alimentação, que é única no documento.
-    //    Para comprovante_recibos, injetamos vale_gas, prestacao_servicos e
-    //    premiacao como parágrafos extras (apenas os não-zerados).
-    $comissao = (float) ($d['comissao'] ?? 0);
-    $alimAnchor = '{Valor de alimentaçao }</w:t></w:r></w:p>';
-
-    // Monta os parágrafos extras a injetar após a alimentação.
-    $extraParas = '';
-
+    // 4+5) Substituição dos slots de combustível e alimentação no DOCX.
+    //      Para comprovante_recibos: substitui label e valor dinamicamente
+    //      usando os w14:paraId únicos de cada parágrafo no modelo.
+    //      Para outros tipos: substituição simples + injeção de comissão.
     if ($tipo === 'comprovante_recibos') {
-        // Campos adicionais de recibos (apenas não-zerados).
-        $camposExtra = [
-            'Vale Gás'              => (float)($d['vale_gas'] ?? 0),
-            'Prestação de Serviços' => (float)($d['prestacao_servicos'] ?? 0),
-            'Premiação'             => (float)($d['premiacao'] ?? 0),
-        ];
-        foreach ($camposExtra as $rotExtra => $valExtra) {
-            if ($valExtra > 0) {
-                $valExtraFmt = preg_replace('/^R\$\s*/', '', formatarMoeda($valExtra));
-                $extraParas .= '<w:p w:rsidR="00DE4B3A" w:rsidRDefault="00000000">'
-                    . '<w:pPr><w:tabs><w:tab w:val="left" w:pos="5666"/></w:tabs>'
-                    . '<w:spacing w:before="41"/><w:ind w:left="1"/><w:jc w:val="both"/>'
-                    . '<w:rPr><w:sz w:val="24"/></w:rPr></w:pPr>'
-                    . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t>' . xml($rotExtra) . '</w:t></w:r>'
-                    . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:tab/><w:t>R$</w:t></w:r>'
-                    . '<w:r><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
-                    . '<w:t xml:space="preserve"> </w:t></w:r>'
-                    . '<w:r w:rsidR="00902927"><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
-                    . '<w:t xml:space="preserve">' . xml($valExtraFmt) . '</w:t></w:r></w:p>';
-            }
+        // Monta lista ordenada de campos não-zerados: [label, valor_formatado]
+        $camposRec = [];
+        if ($combustivelVal > 0)
+            $camposRec[] = ['Auxílio Combustível', $combustivel];
+        if ($alimentacaoVal > 0)
+            $camposRec[] = ['Auxílio Alimentação', $alimentacao];
+        $valeGasVal   = (float)($d['vale_gas'] ?? 0);
+        $prestacaoVal = (float)($d['prestacao_servicos'] ?? 0);
+        $premiacaoVal = (float)($d['premiacao'] ?? 0);
+        if ($valeGasVal > 0)
+            $camposRec[] = ['Vale Gás', preg_replace('/^R\$\s*/', '', formatarMoeda($valeGasVal))];
+        if ($prestacaoVal > 0)
+            $camposRec[] = ['Prestação de Serviços', preg_replace('/^R\$\s*/', '', formatarMoeda($prestacaoVal))];
+        if ($premiacaoVal > 0)
+            $camposRec[] = ['Premiação', preg_replace('/^R\$\s*/', '', formatarMoeda($premiacaoVal))];
+
+        // Constrói um parágrafo DOCX de linha "Label [tab] R$ valor".
+        $mkPara = function (string $lbl, string $val, string $pid, string $tid, string $tab = '5666') {
+            return '<w:p w14:paraId="' . $pid . '" w14:textId="' . $tid . '" w:rsidR="00DE4B3A" w:rsidRDefault="00000000">'
+                . '<w:pPr><w:tabs><w:tab w:val="left" w:pos="' . $tab . '"/></w:tabs>'
+                . '<w:spacing w:before="41"/><w:ind w:left="1"/><w:jc w:val="both"/>'
+                . '<w:rPr><w:sz w:val="24"/></w:rPr></w:pPr>'
+                . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">' . xml($lbl) . '</w:t></w:r>'
+                . '<w:r><w:rPr><w:sz w:val="24"/></w:rPr><w:tab/><w:t>R$</w:t></w:r>'
+                . '<w:r><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>'
+                . '<w:r w:rsidR="00902927"><w:rPr><w:spacing w:val="-4"/><w:sz w:val="24"/></w:rPr>'
+                . '<w:t xml:space="preserve">' . xml($val) . '</w:t></w:r></w:p>';
+        };
+
+        // Parágrafos extras para campos além do 2º slot.
+        $extras = '';
+        for ($i = 2, $iMax = count($camposRec); $i < $iMax; $i++) {
+            $pid = sprintf('%08X', $i + 0xAA000000);
+            $extras .= $mkPara($camposRec[$i][0], $camposRec[$i][1], $pid, $pid);
         }
-        if ($alimentacaoVal == 0) {
-            // Remove o parágrafo da alimentação e injeta os extras no lugar.
-            $xml = preg_replace(
-                '/<w:p\b[^>]*>(?:(?!<\/w:p>).)*\{Valor de alimenta[çc]ao[ ]?\}(?:(?!<\/w:p>).)*<\/w:p>/s',
-                $extraParas,
-                $xml,
-                1
-            );
-        } else {
-            $alimReplace = $alimentacao . '</w:t></w:r></w:p>' . $extraParas;
-            $xml = str_replace($alimAnchor, $alimReplace, $xml);
-            $xml = str_replace('{Valor de alimentaçao}', $alimentacao, $xml);
+
+        // Slot 1 — parágrafo combustível (w14:paraId="224336CF", tab pos 5665)
+        $cStart = '<w:p w14:paraId="224336CF"';
+        $cEnd   = '{Valor de combustivel}</w:t></w:r></w:p>';
+        $cPosS  = strpos($xml, $cStart);
+        $cPosE  = strpos($xml, $cEnd);
+        if ($cPosS !== false && $cPosE !== false) {
+            $repl = isset($camposRec[0])
+                ? $mkPara($camposRec[0][0], $camposRec[0][1], '224336CF', '26ADB594', '5665')
+                : '';
+            $xml = substr_replace($xml, $repl, $cPosS, ($cPosE + strlen($cEnd)) - $cPosS);
+        }
+
+        // Slot 2 — parágrafo alimentação (w14:paraId="079A7420", tab pos 5666)
+        // Re-buscamos pois o substr_replace anterior pode ter deslocado offsets.
+        $aStart = '<w:p w14:paraId="079A7420"';
+        $aEnd   = '{Valor de alimentaçao }</w:t></w:r></w:p>';
+        $aPosS  = strpos($xml, $aStart);
+        $aPosE  = strpos($xml, $aEnd);
+        if ($aPosS !== false && $aPosE !== false) {
+            $repl = isset($camposRec[1])
+                ? $mkPara($camposRec[1][0], $camposRec[1][1], '079A7420', '6A4E3E9B', '5666') . $extras
+                : $extras;
+            $xml = substr_replace($xml, $repl, $aPosS, ($aPosE + strlen($aEnd)) - $aPosS);
         }
     } else {
+        // 4) Valor do combustível (tipos padrão)
+        $xml = str_replace('{Valor de combustivel}', $combustivel, $xml);
+        // 5) Valor da alimentação + injeção de comissão quando presente
+        $comissao   = (float) ($d['comissao'] ?? 0);
+        $alimAnchor = '{Valor de alimentaçao }</w:t></w:r></w:p>';
         $alimReplace = $alimentacao . '</w:t></w:r></w:p>';
         if ($comissao > 0) {
             $comissaoFmt = preg_replace('/^R\$\s*/', '', formatarMoeda($comissao));
@@ -567,7 +581,6 @@ function preencherXmlDoModelo(string $xml, array $d): string
             $alimReplace .= $pComissao;
         }
         $xml = str_replace($alimAnchor, $alimReplace, $xml);
-        // Variante sem espaço (caso o modelo não tenha o espaço final)
         $xml = str_replace('{Valor de alimentaçao}', $alimentacao, $xml);
     }
 
@@ -1984,12 +1997,29 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         foreach ($r['cells'] as $v) {
             $txts[] = strtolower(semAcento(trim((string) $v)));
         }
+        // Detecta linha de cabeçalho principal (antes da seção PAGAMENTO).
+        // Critérios: tem "Funcionários" + coluna de valor reconhecível.
+        // "Serviços Prestados" identifica a aba Laboratório, cujo cabeçalho
+        // não tem "combustível" mas tem essa coluna. Sem esse critério, o loop
+        // continuaria e encontraria o cabeçalho da seção "PAGAMENTO" (que tem
+        // "Combustível"), lendo dados errados para a aba Laboratório.
+        $temFuncionarios = in_array('funcionarios', $txts, true) || in_array('funcionario', $txts, true);
+        $temValorRecibos = in_array('servicos prestados', $txts, true);
+        if (!$temValorRecibos) {
+            foreach ($txts as $_t) {
+                if (strpos($_t, 'vale g') !== false || strpos($_t, 'premia') !== false) {
+                    $temValorRecibos = true;
+                    break;
+                }
+            }
+        }
         if (in_array('aux. combustivel', $txts, true) || in_array('aux. combust', $txts, true)
             || in_array('auxilio combustivel', $txts, true)
             || (in_array('combustivel', $txts, true) && (in_array('salario bruto', $txts, true)
                 || in_array('salario', $txts, true) || in_array('salario liquido', $txts, true)))
-            // No Laboratório o cabeçalho é "Aux. Combustível" + "Salário" — casa aqui.
-            || (in_array('aux. combustivel', $txts, true) && in_array('salario', $txts, true))) {
+            || (in_array('aux. combustivel', $txts, true) && in_array('salario', $txts, true))
+            // Laboratório / Casa Cassiane / Clínica com colunas de recibos
+            || ($temFuncionarios && $temValorRecibos)) {
             $cabecalho = $r['cells'];
             $cabecalhoLinha = $r['row'];
             break;
