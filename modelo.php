@@ -163,15 +163,14 @@ function corpoDoRecibo(array $d): string
     } elseif ($tipo === 'comprovante_recibos') {
         $fraseItens = textoRecibo('frase_referente_recibos') . ' ';
     } elseif ($tipo === 'comprovante') {
-        // Se tem AJ. CUSTO, cita os três; senão só Aux + VA.
-        $fraseItens = $temAj
-            ? textoRecibo('frase_referente_aux_va_aj') . ' '
-            : textoRecibo('frase_referente_aux_va') . ' ';
+        // Comprovante de Vales: referente ao Vale (adiantamento salarial).
+        $fraseItens = 'referente ao Vale (adiantamento salarial) ';
     } else {
         $fraseItens = '';
     }
-    // Quando há comissão, acrescenta "e Comissão" à relação de itens.
-    if ($temCom && $tipo !== 'comprovante_recibos') {
+    // Comissão só é citada no Comprovante de Pagamento (nos Recibos ela já
+    // aparece como linha própria).
+    if ($temCom && $tipo === 'comprovante_pagamento') {
         $fraseItens = rtrim($fraseItens) . ' e Comissão ';
     }
 
@@ -217,6 +216,7 @@ function reciboHTML(array $d, bool $autoPrint = false): string
     $valeGas          = formatarMoeda($d['vale_gas'] ?? 0);
     $prestacaoServicos = formatarMoeda($d['prestacao_servicos'] ?? 0);
     $premiacao        = formatarMoeda($d['premiacao'] ?? 0);
+    $vale             = formatarMoeda($d['vale'] ?? 0);
     $tipo        = (string) ($d['tipo'] ?? 'comprovante');
     if ($tipo === 'comprovante_pagamento') {
         $tituloDoc = textoRecibo('titulo_comprovante_pagamento') ?: 'COMPROVANTE DE PAGAMENTO';
@@ -265,11 +265,16 @@ function reciboHTML(array $d, bool $autoPrint = false): string
 
     // Monta o bloco de linhas da descrição
     if ($tipo === 'comprovante_recibos') {
-        // Para recibos: apenas os 5 campos com valor > 0
+        // Recibos: Aux. Combustível, Vale Alimentação, AJ. Custo, Comissão,
+        // Vale Gás, Prestação de Serviços e Premiação (apenas com valor > 0).
         $linhasDescricao = '';
         $camposRecibos = [
             $rotAuxilio   => (float)($d['combustivel'] ?? 0),
             $rotVale      => (float)($d['alimentacao'] ?? 0),
+            'Extra'       => (float)($d['extra'] ?? 0),
+            'Plantão'     => (float)($d['plantao'] ?? 0),
+            $rotAj        => (float)($d['aj_custo'] ?? 0),
+            $rotCom       => (float)($d['comissao'] ?? 0),
             $rotValeGas   => (float)($d['vale_gas'] ?? 0),
             $rotPrestacao => (float)($d['prestacao_servicos'] ?? 0),
             $rotPremiacao => (float)($d['premiacao'] ?? 0),
@@ -283,16 +288,11 @@ function reciboHTML(array $d, bool $autoPrint = false): string
             }
         }
     } else {
+        // Comprovante de Vales: SOMENTE o "Vale" (adiantamento salarial).
         $linhasDescricao = '<div class="linha">'
-            . '<span class="rot">' . $rotAuxilio . '</span>'
-            . '<span class="vlr">' . $combustivel . '</span>'
-            . '</div>'
-            . '<div class="linha">'
-            . '<span class="rot">' . $rotVale . '</span>'
-            . '<span class="vlr">' . $alimentacao . '</span>'
-            . '</div>'
-            . $linhaAj
-            . $linhaCom;
+            . '<span class="rot">Vale</span>'
+            . '<span class="vlr">' . $vale . '</span>'
+            . '</div>';
     }
 
     // Logo: usa a imagem da empresa (igual ao DOCX) embutida em base64.

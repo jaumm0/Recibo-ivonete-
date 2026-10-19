@@ -81,6 +81,13 @@ function montarDados(array $entrada): array
     $valeGas           = parseValor($entrada['vale_gas'] ?? 0);
     $prestacaoServicos = parseValor($entrada['prestacao_servicos'] ?? 0);
     $premiacao         = parseValor($entrada['premiacao'] ?? 0);
+    // "Vale" (adiantamento salarial) — coluna separada na folha. Vem negativo
+    // na planilha (desconto do salário); aqui tratamos como valor positivo
+    // recebido, usado SOMENTE no Comprovante de Vales.
+    $vale              = abs(parseValor($entrada['vale'] ?? 0));
+    // Extra e Plantão: itens de Recibo (um documento separado por item).
+    $extra             = parseValor($entrada['extra'] ?? 0);
+    $plantao           = parseValor($entrada['plantao'] ?? 0);
 
     $tipoBruto = (string) ($entrada['tipo'] ?? 'comprovante');
     if ($tipoBruto === 'comprovante_pagamento') {
@@ -118,10 +125,13 @@ function montarDados(array $entrada): array
         // (exibida como linha e acrescentada ao valor pago).
         $total = round($total + $comissao, 2);
     } elseif ($tipo === 'comprovante_recibos') {
-        // Recibos: soma dos 5 campos específicos (apenas os que têm valor)
-        $total = round($combustivel + $alimentacao + $valeGas + $prestacaoServicos + $premiacao, 2);
+        // Recibos: Aux. Combustível + Vale Alimentação + AJ. Custo + Comissão
+        // + Vale Gás + Prestação de Serviços + Premiação (apenas os com valor).
+        $total = round($combustivel + $alimentacao + $ajCusto + $comissao
+                     + $valeGas + $prestacaoServicos + $premiacao + $extra + $plantao, 2);
     } else {
-        $total = round($combustivel + $alimentacao + $ajCusto + $comissao, 2);
+        // Comprovante de Vales: SOMENTE o "Vale" (adiantamento salarial).
+        $total = round($vale, 2);
     }
 
     return [
@@ -137,6 +147,9 @@ function montarDados(array $entrada): array
         'vale_gas'             => $valeGas,
         'prestacao_servicos'   => $prestacaoServicos,
         'premiacao'            => $premiacao,
+        'vale'                 => $vale,
+        'extra'                => $extra,
+        'plantao'              => $plantao,
         'tipo'                 => $tipo,
         'valor_total'          => $total,
         'extenso'              => valorPorExtenso($total),
@@ -384,6 +397,8 @@ function preencherXmlDoModelo(string $xml, array $d): string
     $alimentacaoVal = (float)($d['alimentacao'] ?? 0);
     $combustivel = preg_replace('/^R\$\s*/', '', formatarMoeda($combustivelVal));
     $alimentacao = preg_replace('/^R\$\s*/', '', formatarMoeda($alimentacaoVal));
+    $valeVal     = (float)($d['vale'] ?? 0);
+    $vale        = preg_replace('/^R\$\s*/', '', formatarMoeda($valeVal));
     $extenso     = $d['extenso']; // já vem com ponto final
     $nome        = $d['nome'];
     $cpfFmt      = formatarCpf($d['cpf']);
@@ -498,22 +513,43 @@ function preencherXmlDoModelo(string $xml, array $d): string
     //      Para comprovante_recibos: substitui label e valor dinamicamente
     //      usando os w14:paraId únicos de cada parágrafo no modelo.
     //      Para outros tipos: substituição simples + injeção de comissão.
-    if ($tipo === 'comprovante_recibos') {
+    if ($tipo === 'comprovante_recibos' || $tipo === 'comprovante') {
         // Monta lista ordenada de campos não-zerados: [label, valor_formatado]
         $camposRec = [];
-        if ($combustivelVal > 0)
-            $camposRec[] = ['Auxílio Combustível', $combustivel];
-        if ($alimentacaoVal > 0)
-            $camposRec[] = ['Auxílio Alimentação', $alimentacao];
-        $valeGasVal   = (float)($d['vale_gas'] ?? 0);
-        $prestacaoVal = (float)($d['prestacao_servicos'] ?? 0);
-        $premiacaoVal = (float)($d['premiacao'] ?? 0);
-        if ($valeGasVal > 0)
-            $camposRec[] = ['Vale Gás', preg_replace('/^R\$\s*/', '', formatarMoeda($valeGasVal))];
-        if ($prestacaoVal > 0)
-            $camposRec[] = ['Prestação de Serviços', preg_replace('/^R\$\s*/', '', formatarMoeda($prestacaoVal))];
-        if ($premiacaoVal > 0)
-            $camposRec[] = ['Premiação', preg_replace('/^R\$\s*/', '', formatarMoeda($premiacaoVal))];
+        if ($tipo === 'comprovante') {
+            // Comprovante de Vales: SOMENTE o "Vale" (adiantamento salarial),
+            // exibido como valor positivo.
+            if ($valeVal > 0)
+                $camposRec[] = ['Vale', $vale];
+        } else {
+            // Recibos: Aux. Combustível, Vale Alimentação, AJ. Custo, Comissão,
+            // Vale Gás, Prestação de Serviços e Premiação (os com valor > 0).
+            if ($combustivelVal > 0)
+                $camposRec[] = ['Auxílio Combustível', $combustivel];
+            if ($alimentacaoVal > 0)
+                $camposRec[] = ['Auxílio Alimentação', $alimentacao];
+            $extraVal     = (float)($d['extra'] ?? 0);
+            $plantaoVal   = (float)($d['plantao'] ?? 0);
+            if ($extraVal > 0)
+                $camposRec[] = ['Extra', preg_replace('/^R\$\s*/', '', formatarMoeda($extraVal))];
+            if ($plantaoVal > 0)
+                $camposRec[] = ['Plantão', preg_replace('/^R\$\s*/', '', formatarMoeda($plantaoVal))];
+            $ajCustoVal   = (float)($d['aj_custo'] ?? 0);
+            $comissaoVal  = (float)($d['comissao'] ?? 0);
+            $valeGasVal   = (float)($d['vale_gas'] ?? 0);
+            $prestacaoVal = (float)($d['prestacao_servicos'] ?? 0);
+            $premiacaoVal = (float)($d['premiacao'] ?? 0);
+            if ($ajCustoVal > 0)
+                $camposRec[] = ['AJ. Custo', preg_replace('/^R\$\s*/', '', formatarMoeda($ajCustoVal))];
+            if ($comissaoVal > 0)
+                $camposRec[] = ['Comissão', preg_replace('/^R\$\s*/', '', formatarMoeda($comissaoVal))];
+            if ($valeGasVal > 0)
+                $camposRec[] = ['Vale Gás', preg_replace('/^R\$\s*/', '', formatarMoeda($valeGasVal))];
+            if ($prestacaoVal > 0)
+                $camposRec[] = ['Prestação de Serviços', preg_replace('/^R\$\s*/', '', formatarMoeda($prestacaoVal))];
+            if ($premiacaoVal > 0)
+                $camposRec[] = ['Premiação', preg_replace('/^R\$\s*/', '', formatarMoeda($premiacaoVal))];
+        }
 
         // Constrói um parágrafo DOCX de linha "Label [tab] R$ valor".
         $mkPara = function (string $lbl, string $val, string $pid, string $tid, string $tab = '5666') {
@@ -965,21 +1001,18 @@ if ($acao === 'csv') {
         }
         $rotuloEmp = ['fs' => 'FS', 'clinica' => 'Clinica', 'laboratorio' => 'Laboratorio'];
         foreach ($funcionarios as $f) {
-            $dados = montarDados(array_merge($compartilhado, $f, ['tipo' => $tipo]));
-            // Pula funcionários cujo total ficou R$ 0,00 — documento vazio
-            // não serve. (Ex.: alguém com Aux e VA zerados que sobrou na
-            // lista; ou Comprovante de Pagamento sem Salário Líquido.)
-            if (($dados['valor_total'] ?? 0) <= 0) {
-                continue;
-            }
-            $bin = gerarDocx($dados);
+            // Documentos do funcionário: Recibos saem um por item com valor;
+            // os demais tipos saem um só, e só se o total for > 0.
             $prefixo = $rotuloEmp[$f['empresa']] ?? strtoupper($f['empresa']);
             $rotuloTipo = $tipo === 'comprovante_pagamento' ? 'ComprovantePagto'
                 : ($tipo === 'comprovante_recibos' ? 'Recibo'
                 : ($tipo === 'comprovante' ? 'Comprovante' : 'Recibo'));
-            $arq = nomeUnico($prefixo . '_' . $rotuloTipo . '_' . nomeArquivo($f['nome'], 'docx'), $usados);
-            $zip->addFromString($arq, $bin);
-            $gerados++;
+            foreach (docsDoFuncionario($f, $tipo, $compartilhado) as [$dados, $sufixo]) {
+                $bin = gerarDocx($dados);
+                $arq = nomeUnico($prefixo . '_' . $rotuloTipo . $sufixo . '_' . nomeArquivo($f['nome'], 'docx'), $usados);
+                $zip->addFromString($arq, $bin);
+                $gerados++;
+            }
         }
     } else {
         /* --- CSV: empresa comum a todos --- */
@@ -1004,7 +1037,13 @@ if ($acao === 'csv') {
             'alimentacao' => buscarColuna($cabecalho, ['alimentacao', 'alimentação', 'vale alimentacao', 'vale alimentação', 'alimentacao/vale']),
             'aj_custo'    => buscarColuna($cabecalho, ['aj. custo', 'aj custo', 'aj_custo', 'ajuda de custo', 'ajuda custo']),
             'comissao'    => buscarColuna($cabecalho, ['comissao', 'comissão', 'comissao.', 'comissão.']),
+            // "Vale" (adiantamento) exige cabeçalho EXATAMENTE "vale" — assim
+            // não captura "vale alimentação" / "vale gás".
+            'vale'        => array_search('vale', array_map(fn($c) => strtolower(trim($c)), $cabecalho), true),
+            'extra'       => buscarColuna($cabecalho, ['extra', 'extras']),
+            'plantao'     => buscarColuna($cabecalho, ['plantao', 'plantão', 'plantoes', 'plantões']),
         ];
+        if ($idx['vale'] === false) { $idx['vale'] = -1; }
 
         foreach ($linhas as $linha) {
             if (count($linha) < 2) {
@@ -1018,24 +1057,31 @@ if ($acao === 'csv') {
             $alim = parseValor($linha[$idx['alimentacao']] ?? 0);
             $aj   = parseValor($linha[$idx['aj_custo']] ?? 0);
             $com  = parseValor($linha[$idx['comissao']] ?? 0);
-            if ($comb + $alim + $aj + $com <= 0) {
+            $vale = $idx['vale'] >= 0 ? abs(parseValor($linha[$idx['vale']] ?? 0)) : 0.0;
+            $ex   = $idx['extra'] >= 0 ? parseValor($linha[$idx['extra']] ?? 0) : 0.0;
+            $pl   = $idx['plantao'] >= 0 ? parseValor($linha[$idx['plantao']] ?? 0) : 0.0;
+            if ($comb + $alim + $aj + $com + $vale + $ex + $pl <= 0) {
                 continue;
             }
-            $dados = montarDados(array_merge($compartilhado, [
+            $rotuloTipo = $tipo === 'comprovante_pagamento' ? 'ComprovantePagto'
+                : ($tipo === 'comprovante_recibos' ? 'Recibo'
+                : ($tipo === 'comprovante' ? 'Comprovante' : 'Recibo'));
+            $funcCsv = [
                 'nome'        => $nome,
                 'cpf'         => $linha[$idx['cpf']] ?? '',
                 'combustivel' => $comb,
                 'alimentacao' => $alim,
                 'aj_custo'    => $aj,
                 'comissao'    => $com,
-                'tipo'        => $tipo,
-            ]));
-            $bin = gerarDocx($dados);
-            $rotuloTipo = $tipo === 'comprovante_pagamento' ? 'ComprovantePagto'
-                : ($tipo === 'comprovante_recibos' ? 'Recibo'
-                : ($tipo === 'comprovante' ? 'Comprovante' : 'Recibo'));
-            $zip->addFromString(nomeUnico($rotuloTipo . '_' . nomeArquivo($nome, 'docx'), $usados), $bin);
-            $gerados++;
+                'vale'        => $vale,
+                'extra'       => $ex,
+                'plantao'     => $pl,
+            ];
+            foreach (docsDoFuncionario($funcCsv, $tipo, $compartilhado) as [$dados, $sufixo]) {
+                $bin = gerarDocx($dados);
+                $zip->addFromString(nomeUnico($rotuloTipo . $sufixo . '_' . nomeArquivo($nome, 'docx'), $usados), $bin);
+                $gerados++;
+            }
         }
     }
 
@@ -1115,6 +1161,7 @@ if ($acao === 'csv') {
         'prestacao'     => 0.0,
         'premiacao_tot' => 0.0,
         'totalRecibos'  => 0.0,
+        'vale'          => 0.0,
     ];
     $temSalarios = false;
 
@@ -1150,6 +1197,7 @@ if ($acao === 'csv') {
                 'prestacao'    => 0.0,
                 'premiacao'    => 0.0,
                 'totalRecibos' => 0.0,
+                'vale'         => 0.0,
             ];
         }
         $aux = (float)$f['combustivel'];
@@ -1161,6 +1209,9 @@ if ($acao === 'csv') {
         $vg  = (float)($f['vale_gas']           ?? 0);
         $ps  = (float)($f['prestacao_servicos']  ?? 0);
         $pm  = (float)($f['premiacao']           ?? 0);
+        $vl  = (float)($f['vale']                ?? 0);
+        $ex  = (float)($f['extra']               ?? 0);
+        $pl  = (float)($f['plantao']             ?? 0);
 
         // Líquido que vai aparecer no Comprovante de Pagamento:
         // - usa o salário_liquido da planilha se preenchido
@@ -1169,7 +1220,7 @@ if ($acao === 'csv') {
             ? $liquido
             : ($bruto > 0 ? max(0, round($bruto - $aux - $va - $aj, 2)) : 0);
 
-        $totalRecibos = round($aux + $va + $vg + $ps + $pm, 2);
+        $totalRecibos = round($aux + $va + $aj + $com + $vg + $ps + $pm + $ex + $pl, 2);
 
         $porEmpresa[$chave]['qtd']++;
         $porEmpresa[$chave]['aux']          += $aux;
@@ -1183,9 +1234,10 @@ if ($acao === 'csv') {
         $porEmpresa[$chave]['prestacao']    += $ps;
         $porEmpresa[$chave]['premiacao']    += $pm;
         $porEmpresa[$chave]['totalRecibos'] += $totalRecibos;
+        $porEmpresa[$chave]['vale']         += $vl;
 
-        // Só conta como "geraria doc" se o total for > 0 no tipo.
-        if ($aux > 0 || $va > 0 || $aj > 0 || $com > 0) {
+        // Comprovante de Vales: gera só quem tem "Vale" (adiantamento) > 0.
+        if ($vl > 0) {
             $porEmpresa[$chave]['qtdVales']++;
             $totalGeral['qtdVales']++;
         }
@@ -1193,9 +1245,11 @@ if ($acao === 'csv') {
             $porEmpresa[$chave]['qtdPagto']++;
             $totalGeral['qtdPagto']++;
         }
-        if ($totalRecibos > 0) {
-            $porEmpresa[$chave]['qtdRecibos']++;
-            $totalGeral['qtdRecibos'] = ($totalGeral['qtdRecibos'] ?? 0) + 1;
+        // Um Recibo por item com valor (não por funcionário).
+        $nItensRec = count(itensRecibo($f));
+        if ($nItensRec > 0) {
+            $porEmpresa[$chave]['qtdRecibos'] += $nItensRec;
+            $totalGeral['qtdRecibos'] = ($totalGeral['qtdRecibos'] ?? 0) + $nItensRec;
         }
 
         $totalGeral['qtd']++;
@@ -1210,6 +1264,7 @@ if ($acao === 'csv') {
         $totalGeral['prestacao']     = ($totalGeral['prestacao'] ?? 0) + $ps;
         $totalGeral['premiacao_tot'] = ($totalGeral['premiacao_tot'] ?? 0) + $pm;
         $totalGeral['totalRecibos']  = ($totalGeral['totalRecibos'] ?? 0) + $totalRecibos;
+        $totalGeral['vale']          = ($totalGeral['vale'] ?? 0) + $vl;
         if ($liquido > 0 || $bruto > 0) {
             $temSalarios = true;
         }
@@ -1287,7 +1342,7 @@ if ($acao === 'csv') {
             $linhas .= '<td class="num">' . $fmt($e['bruto']) . '</td>'
                      . '<td class="num">' . $fmt($e['liquido']) . '</td>';
         }
-        $linhas .= '<td class="num"><b>' . $fmt($totalAuxVa) . '</b></td>'
+        $linhas .= '<td class="num"><b>' . $fmt($e['vale'] ?? 0) . '</b></td>'
                  . '<td class="num"><b>' . $fmt($totalGeralLinha) . '</b></td>';
         if ($temRecibos) {
             $linhas .= '<td class="num">' . $e['qtdRecibos'] . '</td>'
@@ -1305,6 +1360,7 @@ if ($acao === 'csv') {
     $gtotalGeral = $gtotalAuxVaAj + $totalGeral['comissao'];
     $gtotalLiquido = $totalGeral['liquido'];
     $gtotalLiqCalc = $totalGeral['liqCalc'];
+    $gtotalVale    = $totalGeral['vale'] ?? 0.0;
 
     // Cabeçalho/rodapé da tabela de salários (só se a planilha tiver).
     if ($temSalarios) {
@@ -1345,12 +1401,12 @@ if ($acao === 'csv') {
         $estiloVales       = '';
         $disabledVales     = '';
         $tagVales          = 'COMPROVANTE DE VALES';
-        $totalValesDisplay = "{$qtdVales} doc(s) &middot; Total: {$fmt($gtotalGeral)}";
+        $totalValesDisplay = "{$qtdVales} doc(s) &middot; Total: {$fmt($gtotalVale)}";
     } else {
         $estiloVales       = 'style="opacity:.55;cursor:not-allowed;"';
-        $disabledVales     = 'disabled title="Nenhum funcionário com Aux/VA/AJ.CUSTO na planilha"';
+        $disabledVales     = 'disabled title="Nenhum funcionário com Vale (adiantamento) na planilha"';
         $tagVales          = 'INDISPONÍVEL';
-        $totalValesDisplay = 'Nenhum funcionário com Auxílio/VA/AJ. CUSTO';
+        $totalValesDisplay = 'Nenhum funcionário com Vale (adiantamento)';
     }
 
     if ($temSalarios && $qtdPagto > 0) {
@@ -1373,7 +1429,7 @@ if ($acao === 'csv') {
         $totalRecibosDisplay = "{$qtdRecibos} doc(s) &middot; Total: {$totalRecibosGlobalFmt}";
     } else {
         $estiloRecibos       = 'style="opacity:.55;cursor:not-allowed;"';
-        $disabledRecibos     = 'disabled title="Nenhum funcionário com Vale Gás, Prestação de Serviços ou Premiação na planilha"';
+        $disabledRecibos     = 'disabled title="Nenhum funcionário com Aux. Combustível, Vale Alimentação, AJ. Custo, Comissão, Vale Gás, Prestação ou Premiação na planilha"';
         $tagRecibos          = 'INDISPONÍVEL';
         $totalRecibosDisplay = 'Nenhum funcionário com dados de recibos';
     }
@@ -1513,14 +1569,14 @@ if ($acao === 'csv') {
           <td class="num">{$fmt($totalGeral['aj'])}</td>
           {$rodapeComissao}
           {$rodapeSalario}
-          <td class="num">{$fmt($gtotalAuxVa)}</td>
+          <td class="num">{$fmt($gtotalVale)}</td>
           <td class="num">{$fmt($gtotalGeral)}</td>
           {$rodapeRecibos}
         </tr>
       </tfoot>
     </table>
     </div>
-    <div class="aviso">Funcionários sem Auxílio/VA/AJ. CUSTO/Comissão <b>não geram Comprovante de Vales</b> (ficaria R$ 0,00). Já o <b>Comprovante de Pagamento</b> usa Salário Líquido quando a planilha tem, ou calcula <i>Bruto − Aux − VA − AJ. CUSTO</i> na folha de pagamento — funcionários só com salário base também geram esse. <b>Comissão</b> (quando há na planilha) é exibida como linha e somada ao total nos dois documentos.</div>
+    <div class="aviso">O <b>Comprovante de Vales</b> usa apenas a coluna <b>Vale</b> (adiantamento salarial) — só gera para quem tem Vale &gt; 0, exibido como valor positivo. <b>Auxílio Combustível, Vale Alimentação, AJ. Custo e Comissão</b> vão para os <b>Recibos</b>. O <b>Comprovante de Pagamento</b> usa Salário Líquido quando a planilha tem, ou calcula <i>Bruto − Aux − VA − AJ. CUSTO</i> na folha de pagamento.</div>
   </section>
 
   <form action="gerar.php" method="post">
@@ -1537,7 +1593,7 @@ if ($acao === 'csv') {
         <div class="opcao comprovante" data-tipo="comprovante" onclick="marcarTipo(this, 'comprovante')" {$estiloVales}>
           <span class="tag">{$tagVales}</span>
           <h3>🧾 Comprovante de Vales</h3>
-          <p>Cada funcionário recebe um comprovante com Auxílio + Vale Alimentação <b>(+ AJ. CUSTO e Comissão, se houver)</b> somados no total.</p>
+          <p>Cada funcionário com <b>Vale</b> (adiantamento salarial) na planilha recebe um comprovante com esse valor, exibido como positivo.</p>
           <div class="total">{$totalValesDisplay}</div>
         </div>
         <div class="opcao pagamento" data-tipo="comprovante_pagamento" onclick="marcarTipo(this, 'comprovante_pagamento')" {$estiloPagamento}>
@@ -1549,7 +1605,7 @@ if ($acao === 'csv') {
         <div class="opcao recibos" data-tipo="comprovante_recibos" onclick="marcarTipo(this, 'comprovante_recibos')" {$estiloRecibos}>
           <span class="tag">{$tagRecibos}</span>
           <h3>🧾 Recibos</h3>
-          <p>Gera recibo com os valores de <b>Auxílio Alimentação, Auxílio Combustível, Vale Gás, Prestação de Serviços e Premiação</b> — apenas os campos com valor.</p>
+          <p>Gera recibo com os valores de <b>Auxílio Combustível, Vale Alimentação, AJ. Custo, Comissão, Vale Gás, Prestação de Serviços e Premiação</b> — apenas os campos com valor.</p>
           <div class="total">{$totalRecibosDisplay}</div>
         </div>
       </div>
@@ -1609,7 +1665,7 @@ HTML;
     $entrada = array_merge($_GET ?? [], $_POST ?? []);
     $dados = montarDados($entrada);
     if (($dados['valor_total'] ?? 0) <= 0) {
-        responderErroRecibo('Informe ao menos um valor (Auxílio Combustível ou Vale Alimentação) maior que zero.');
+        responderErroRecibo('Informe ao menos um valor maior que zero.');
     }
     // O JS passa autoPrint=1 quando o botão Imprimir foi clicado.
     $autoPrint = isset($entrada['autoPrint']) && $entrada['autoPrint'] == '1';
@@ -1622,7 +1678,7 @@ HTML;
     $dados = montarDados($_POST);
 
     if (($dados['valor_total'] ?? 0) <= 0) {
-        responderErroRecibo('Informe ao menos um valor (Auxílio Combustível ou Vale Alimentação) maior que zero.');
+        responderErroRecibo('Informe ao menos um valor maior que zero.');
     }
 
     if ($formato === 'html') {
@@ -1671,6 +1727,63 @@ function buscarColuna(array $cabecalho, array $sinonimos): int
         }
     }
     return -1;
+}
+
+/**
+ * Itens que viram Recibo. Cada um gera um documento separado, e só quando
+ * tem valor > 0 (campo em branco não gera documento).
+ */
+/** Campo => rótulo de cada item de Recibo. Função (não const) para valer na requisição. */
+function mapaItensRecibo(): array
+{
+    return [
+        'extra'              => 'Extra',
+        'plantao'            => 'Plantão',
+        'combustivel'        => 'Auxílio Combustível',
+        'alimentacao'        => 'Auxílio Alimentação',
+        'aj_custo'           => 'AJ. Custo',
+        'comissao'           => 'Comissão',
+        'vale_gas'           => 'Vale Gás',
+        'prestacao_servicos' => 'Prestação de Serviços',
+        'premiacao'          => 'Premiação',
+    ];
+}
+
+/** Lista os itens de Recibo com valor para um funcionário. */
+function itensRecibo(array $f): array
+{
+    $itens = [];
+    foreach (mapaItensRecibo() as $campo => $rotulo) {
+        $valor = (float) ($f[$campo] ?? 0);
+        if ($valor > 0) {
+            $itens[] = ['campo' => $campo, 'rotulo' => $rotulo, 'valor' => $valor];
+        }
+    }
+    return $itens;
+}
+
+/**
+ * Documentos a gerar para um funcionário, como pares [dados, sufixo_do_arquivo].
+ *  - Recibos: UM documento por item com valor (ex.: Extra, depois Plantão...).
+ *  - Vales / Pagamento: um documento com o total do tipo.
+ */
+function docsDoFuncionario(array $f, string $tipo, array $compartilhado): array
+{
+    if ($tipo !== 'comprovante_recibos') {
+        $dados = montarDados(array_merge($compartilhado, $f, ['tipo' => $tipo]));
+        return ($dados['valor_total'] ?? 0) > 0 ? [[$dados, '']] : [];
+    }
+    $docs = [];
+    foreach (itensRecibo($f) as $item) {
+        // Zera todos os outros campos: o documento leva só este item.
+        $so = array_fill_keys(array_keys(mapaItensRecibo()), 0);
+        $so['vale'] = 0;
+        $so[$item['campo']] = $item['valor'];
+        $dados = montarDados(array_merge($compartilhado, $f, $so, ['tipo' => 'comprovante_recibos']));
+        $sufixo = preg_replace('/[^A-Za-z0-9]/', '', iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $item['rotulo']));
+        $docs[] = [$dados, '_' . $sufixo];
+    }
+    return $docs;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1909,14 +2022,16 @@ function listarAbasXlsx(string $path): array
 function chaveEmpresaPorNomeAba(string $nome): ?string
 {
     $n = strtolower(semAcento(trim($nome)));
-    if ($n === '' || strpos($n, 'fidelidade') !== false) {
-        return null; // pulado — aba de resumo, não emite recibos
+    if ($n === '') {
+        return null; // aba sem nome: pulada
     }
     if (strpos($n, 'clinica') !== false) return 'clinica';
     if (strpos($n, 'laborat') !== false) return 'laboratorio';
     if (strpos($n, 'fs') !== false) return 'fs';
-    // Aba com nome desconhecido mas não é Fidelidade: deixa o conteúdo
-    // da planilha determinar a empresa (título na célula B1/C1).
+    // Demais abas (incl. "Fidelidade", "Casa Cassiane"): deixa o conteúdo
+    // da planilha determinar a empresa pelo título (célula B1/C1). A aba
+    // "Fidelidade" tem funcionários reais (ex.: Claudio, Juvenal) e o título
+    // "FIDELIDADE SAÚDE" é detectado como a empresa 'clinica'.
     return '__auto__';
 }
 
@@ -2035,6 +2150,7 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
     $colNome = -1; $colAux = -1; $colVa = -1;
     $colComissao = -1; $colSalarioBruto = -1; $colSalarioLiquido = -1;
     $colValeGas = -1; $colPrestacaoServicos = -1; $colPremiacao = -1;
+    $colVale = -1; $colExtra = -1; $colPlantao = -1;
     foreach ($cabecalho as $idx => $rotulo) {
         $n = strtolower(semAcento(trim((string) $rotulo)));
         if ($n === '') continue;
@@ -2057,6 +2173,18 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         if ($colVa === -1 && ($n === 'va' || $n === 'v.a.' || $n === 'v.a'
             || strpos($n, 'vale aliment') !== false || strpos($n, 'vale alim') !== false)) {
             $colVa = $idx;
+        }
+        // "Vale" sozinho = adiantamento salarial (coluna distinta de VA/Vale Gás).
+        // Usado SOMENTE no Comprovante de Vales.
+        if ($colVale === -1 && $n === 'vale') {
+            $colVale = $idx;
+        }
+        // Extras e Plantões (cabeçalho "Plantões" → radical "plant").
+        if ($colExtra === -1 && strpos($n, 'extra') !== false) {
+            $colExtra = $idx;
+        }
+        if ($colPlantao === -1 && strpos($n, 'plant') !== false) {
+            $colPlantao = $idx;
         }
         if ($colSalarioBruto === -1 && (strpos($n, 'salario bruto') !== false
             || (strpos($n, 'salario') !== false && strpos($n, 'bruto') !== false))) {
@@ -2159,6 +2287,11 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         $valeGasFolha          = $colValeGas           !== -1 ? parseValorFolha($cells[$colValeGas]           ?? '') : 0.0;
         $prestacaoServicosFolha = $colPrestacaoServicos !== -1 ? parseValorFolha($cells[$colPrestacaoServicos] ?? '') : 0.0;
         $premiacaoFolha        = $colPremiacao          !== -1 ? parseValorFolha($cells[$colPremiacao]         ?? '') : 0.0;
+        // "Vale" vem negativo (desconto do salário); o adiantamento recebido
+        // é o valor absoluto, exibido no Comprovante de Vales.
+        $valeFolha             = $colVale              !== -1 ? abs(parseValorFolha($cells[$colVale]           ?? '')) : 0.0;
+        $extraFolha            = $colExtra             !== -1 ? parseValorFolha($cells[$colExtra]             ?? '') : 0.0;
+        $plantaoFolha          = $colPlantao           !== -1 ? parseValorFolha($cells[$colPlantao]           ?? '') : 0.0;
 
         // Complementa combustível/VA da seção PAGAMENTO quando a tabela
         // principal não tem essas colunas (Clínica, FS).
@@ -2166,11 +2299,14 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
             $pc = $pagto[$nomeNorm]['comb'];
             $pv = $pagto[$nomeNorm]['va'];
             if ($colAux === -1 && $pc > 0) {
-                // Ignora o "alias": na Laboratório o combustível do PAGAMENTO
-                // só replica Serviços Prestados; na FS replica a Premiação.
+                // Ignora o "alias": a coluna Combustível do PAGAMENTO costuma
+                // ser uma fórmula que só replica outro campo da tabela
+                // principal — Serviços Prestados (Laboratório), Premiação (FS)
+                // ou Comissão (Fidelidade). Nesses casos não vira combustível.
                 $ehAliasServicos  = $sheetHasServicos;
                 $ehAliasPremiacao = ($premiacaoFolha > 0 && abs($pc - $premiacaoFolha) < 0.01);
-                if (!$ehAliasServicos && !$ehAliasPremiacao) {
+                $ehAliasComissao  = ($comissaoFolha > 0 && abs($pc - $comissaoFolha) < 0.01);
+                if (!$ehAliasServicos && !$ehAliasPremiacao && !$ehAliasComissao) {
                     $comb = $pc;
                 }
             }
@@ -2184,7 +2320,7 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
         // filtro por tipo de documento acontece depois em montarDados.
         if ($brutoFolha <= 0 && $liquidoFolha <= 0 && $comb <= 0 && $va <= 0
             && $valeGasFolha <= 0 && $prestacaoServicosFolha <= 0 && $premiacaoFolha <= 0
-            && $comissaoFolha <= 0) {
+            && $comissaoFolha <= 0 && $valeFolha <= 0 && $extraFolha <= 0 && $plantaoFolha <= 0) {
             continue;
         }
 
@@ -2208,6 +2344,9 @@ function extrairFuncionariosFolhaPagamento(array $rows, ?string $overrideEmpresa
             'vale_gas'             => $valeGasFolha,
             'prestacao_servicos'   => $prestacaoServicosFolha,
             'premiacao'            => $premiacaoFolha,
+            'vale'                 => $valeFolha,
+            'extra'                => $extraFolha,
+            'plantao'              => $plantaoFolha,
         ];
     }
     return $funcionarios;
@@ -2279,6 +2418,7 @@ function extrairFuncionariosXlsxSecoes(array $rows): array
             'alimentacao' => $alim,
             'aj_custo'    => $aj,
             'comissao'    => 0.0,
+            'vale'        => 0.0,
         ];
     }
 
