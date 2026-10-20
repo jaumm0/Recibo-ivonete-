@@ -194,6 +194,10 @@ const EMPRESAS = [
         'nome' => 'Laboratório',
         'logo' => __DIR__ . '/WhatsApp Image 2026-08-06 at 8.51.33 AM.jpeg',
     ],
+    'fidelidade'  => [
+        'nome' => 'Fidelidade Saúde',
+        'logo' => __DIR__ . '/WhatsApp Image 2026-08-06 at 8.52.03 AM.jpeg',
+    ],
 ];
 
 /** Altura da faixa de logo no DOCX, em EMU. 873918 EMU = ~0,91 cm. */
@@ -999,7 +1003,7 @@ if ($acao === 'csv') {
             $funcionarios = [];
             $erro = $e->getMessage();
         }
-        $rotuloEmp = ['fs' => 'FS', 'clinica' => 'Clinica', 'laboratorio' => 'Laboratorio'];
+        $rotuloEmp = ['fs' => 'FS', 'clinica' => 'Clinica', 'laboratorio' => 'Laboratorio', 'fidelidade' => 'Fidelidade'];
         foreach ($funcionarios as $f) {
             // Documentos do funcionário: Recibos saem um por item com valor;
             // os demais tipos saem um só, e só se o total for > 0.
@@ -1176,7 +1180,7 @@ if ($acao === 'csv') {
         $erroLeitura = $e->getMessage();
     }
 
-    $empNomes = ['fs' => 'FS', 'clinica' => 'Clínica', 'laboratorio' => 'Laboratório'];
+    $empNomes = ['fs' => 'FS', 'clinica' => 'Clínica', 'laboratorio' => 'Laboratório', 'fidelidade' => 'Fidelidade'];
     foreach ($funcionarios as $f) {
         $chave = $f['empresa'];
         if (!isset($porEmpresa[$chave])) {
@@ -2027,11 +2031,10 @@ function chaveEmpresaPorNomeAba(string $nome): ?string
     }
     if (strpos($n, 'clinica') !== false) return 'clinica';
     if (strpos($n, 'laborat') !== false) return 'laboratorio';
+    if (strpos($n, 'fidelidade') !== false) return 'fidelidade';
     if (strpos($n, 'fs') !== false) return 'fs';
-    // Demais abas (incl. "Fidelidade", "Casa Cassiane"): deixa o conteúdo
-    // da planilha determinar a empresa pelo título (célula B1/C1). A aba
-    // "Fidelidade" tem funcionários reais (ex.: Claudio, Juvenal) e o título
-    // "FIDELIDADE SAÚDE" é detectado como a empresa 'clinica'.
+    // Demais abas (ex.: "Casa Cassiane"): deixa o conteúdo da planilha
+    // determinar a empresa pelo título (célula B1/C1).
     return '__auto__';
 }
 
