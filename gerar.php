@@ -198,6 +198,10 @@ const EMPRESAS = [
         'nome' => 'Fidelidade Saúde',
         'logo' => __DIR__ . '/WhatsApp Image 2026-08-06 at 8.52.03 AM.jpeg',
     ],
+    'due'         => [
+        'nome' => 'Due',
+        'logo' => null, // sem logo própria: usa a logo original do modelo
+    ],
 ];
 
 /** Altura da faixa de logo no DOCX, em EMU. 873918 EMU = ~0,91 cm. */
@@ -1003,7 +1007,7 @@ if ($acao === 'csv') {
             $funcionarios = [];
             $erro = $e->getMessage();
         }
-        $rotuloEmp = ['fs' => 'FS', 'clinica' => 'Clinica', 'laboratorio' => 'Laboratorio', 'fidelidade' => 'Fidelidade'];
+        $rotuloEmp = ['fs' => 'FS', 'clinica' => 'Clinica', 'laboratorio' => 'Laboratorio', 'fidelidade' => 'Fidelidade', 'due' => 'Due'];
         foreach ($funcionarios as $f) {
             // Documentos do funcionário: Recibos saem um por item com valor;
             // os demais tipos saem um só, e só se o total for > 0.
@@ -1180,7 +1184,7 @@ if ($acao === 'csv') {
         $erroLeitura = $e->getMessage();
     }
 
-    $empNomes = ['fs' => 'FS', 'clinica' => 'Clínica', 'laboratorio' => 'Laboratório', 'fidelidade' => 'Fidelidade'];
+    $empNomes = ['fs' => 'FS', 'clinica' => 'Clínica', 'laboratorio' => 'Laboratório', 'fidelidade' => 'Fidelidade', 'due' => 'Due'];
     foreach ($funcionarios as $f) {
         $chave = $f['empresa'];
         if (!isset($porEmpresa[$chave])) {
@@ -2032,6 +2036,7 @@ function chaveEmpresaPorNomeAba(string $nome): ?string
     if (strpos($n, 'clinica') !== false) return 'clinica';
     if (strpos($n, 'laborat') !== false) return 'laboratorio';
     if (strpos($n, 'fidelidade') !== false) return 'fidelidade';
+    if (strpos($n, 'due') !== false) return 'due';
     if (strpos($n, 'fs') !== false) return 'fs';
     // Demais abas (ex.: "Casa Cassiane"): deixa o conteúdo da planilha
     // determinar a empresa pelo título (célula B1/C1).
