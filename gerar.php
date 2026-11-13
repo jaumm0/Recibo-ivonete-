@@ -199,8 +199,10 @@ const EMPRESAS = [
         'logo' => __DIR__ . '/WhatsApp Image 2026-08-06 at 8.52.03 AM.jpeg',
     ],
     'due'         => [
-        'nome' => 'Due',
-        'logo' => null, // sem logo própria: usa a logo original do modelo
+        'nome' => 'Due Salon',
+        'logo' => __DIR__ . '/_logo_due.jpeg',
+        'endereco' => 'Antonio Maria Coelho 3431, JD dos Estados, Campo Grande - MS',
+        'cnpj'     => '69.544.064/0001-50',
     ],
 ];
 
