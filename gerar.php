@@ -107,23 +107,16 @@ function montarDados(array $entrada): array
     //                                 alimentacao - aj_custo)
     //   - qualquer outro valor    = tratado como 'comprovante' (padrão)
     if ($tipo === 'comprovante_pagamento') {
-        if ($salarioLiquido > 0) {
-            // Planilha já trouxe o líquido calculado (planilha antiga,
-            // ou futuras folhas com essa coluna). Usa o que veio.
-            $total = $salarioLiquido;
-        } elseif ($salarioBruto > 0) {
-            // Folha de Agosto (sem coluna Salário Líquido): calcula o
-            // líquido = Bruto - Aux - VA - AJ.CUSTO. Limita em zero
-            // caso os vales excedam o salário.
-            $descontos = $combustivel + $alimentacao + $ajCusto;
-            $total = max(0, round($salarioBruto - $descontos, 2));
+        // Mostra o Salário Bruto — é o total que a pessoa recebeu no mês.
+        // A Comissão NÃO entra aqui: ela é um item do Recibo
+        // (comprovante_recibos). Usa o líquido só como reserva, caso a
+        // planilha não tenha a coluna de bruto.
+        if ($salarioBruto > 0) {
+            $total = $salarioBruto;
         } else {
-            // Sem nenhum dado de salário — não há como emitir.
-            $total = 0;
+            $total = $salarioLiquido;
         }
-        // Comissão é somada ao total também no Comprovante de Pagamento
-        // (exibida como linha e acrescentada ao valor pago).
-        $total = round($total + $comissao, 2);
+        $total = round($total, 2);
     } elseif ($tipo === 'comprovante_recibos') {
         // Recibos: Aux. Combustível + Vale Alimentação + AJ. Custo + Comissão
         // + Vale Gás + Prestação de Serviços + Premiação (apenas os com valor).
@@ -1223,12 +1216,10 @@ if ($acao === 'csv') {
         $ex  = (float)($f['extra']               ?? 0);
         $pl  = (float)($f['plantao']             ?? 0);
 
-        // Líquido que vai aparecer no Comprovante de Pagamento:
-        // - usa o salário_liquido da planilha se preenchido
-        // - senão calcula bruto - aux - va - aj (limitado em 0)
-        $liqCalc = $liquido > 0
-            ? $liquido
-            : ($bruto > 0 ? max(0, round($bruto - $aux - $va - $aj, 2)) : 0);
+        // Valor que vai aparecer no Comprovante de Pagamento = Salário Bruto
+        // (total recebido no mês). Usa o líquido só como reserva, caso a
+        // planilha não tenha a coluna de bruto. Mesma regra do montarDados.
+        $liqCalc = $bruto > 0 ? $bruto : $liquido;
 
         $totalRecibos = round($aux + $va + $aj + $com + $vg + $ps + $pm + $ex + $pl, 2);
 
